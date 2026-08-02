@@ -77,8 +77,23 @@ php artisan cache:clear || echo "⚠️  Cache clear had issues, continuing..."
 rm -rf /var/www/html/storage/framework/views/livewire/classes/*
 rm -rf /var/www/html/storage/framework/views/livewire/views/*
 
+# A leftover /public/hot from a dev machine would put @vite in "expect a
+# Vite dev server at :5173" mode and every CSS/JS <link> would 404.
+rm -f /var/www/html/public/hot
+
 echo "📦 Publishing Livewire assets..."
 php artisan livewire:publish --assets 2>/dev/null || true
+
+# Vite assets safety net. In the vast majority of cases /public/build was
+# populated at image-build time — but if for any reason the manifest is
+# missing (image ran without a build step, volume shadowing, etc.) we
+# rebuild on the running container so the app doesn't come up unstyled.
+if [ ! -f /var/www/html/public/build/manifest.json ]; then
+    echo "⚠️  /public/build/manifest.json missing — rebuilding assets at boot"
+    (cd /var/www/html && npm ci --no-audit --no-fund && npm run build) \
+        || echo "❌  Vite rebuild failed — the app will render unstyled"
+fi
+chmod -R a+r /var/www/html/public/build 2>/dev/null || true
 
 echo "🔗 Ensuring storage symlink..."
 php artisan storage:link 2>/dev/null || true

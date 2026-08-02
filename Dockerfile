@@ -48,13 +48,23 @@ WORKDIR /var/www/html
 # excluded via .dockerignore so the build context stays small.
 COPY . .
 
-# PHP deps, then front-end build (Vite → /public/build), then bin the JS toolchain.
+# PHP deps first.
 RUN composer install --no-dev --optimize-autoloader --no-interaction
-RUN npm ci && npm run build && rm -rf node_modules
+
+# Front-end build. Kept as its own layer so failures show up clearly, and
+# verified afterwards — if `npm run build` produced nothing, the image would
+# otherwise ship with a page that renders unstyled HTML because @vite falls
+# through to broken asset URLs.
+RUN npm ci --no-audit --no-fund \
+    && npm run build \
+    && test -f /var/www/html/public/build/manifest.json \
+    && echo "🎨 Vite build OK — $(ls /var/www/html/public/build/assets | wc -l) assets" \
+    && rm -rf node_modules
 
 RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 775 /var/www/html/storage \
-    && chmod -R 775 /var/www/html/bootstrap/cache
+    && chmod -R 775 /var/www/html/bootstrap/cache \
+    && chmod -R a+r /var/www/html/public/build
 
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisord.conf

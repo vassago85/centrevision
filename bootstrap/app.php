@@ -23,6 +23,14 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => PermissionMiddleware::class,
         ]);
 
+        // Production sits behind Nginx Proxy Manager (or any reverse proxy)
+        // which terminates TLS and forwards over plain HTTP. Without this,
+        // Laravel doesn't see X-Forwarded-Proto:https, so url()/asset()
+        // emit http:// URLs and the browser blocks them as mixed content.
+        // '*' trusts any upstream; scope it if the deployment target ever
+        // exposes the app to something other than a controlled proxy.
+        $middleware->trustProxies(at: '*');
+
         // The gateway has no session and therefore no token; the webhook's
         // own signature check is what authenticates it.
         $middleware->validateCsrfTokens(except: [

@@ -66,7 +66,10 @@
     --tf-accent-2: #3e78dc;
     --tf-accent-soft: #142236;
 
-    --tf-brand-navy: #d3dbe9;
+    /* Brand navy is a fixed brand colour — it must not flip in dark mode,
+       otherwise the landing hero gradient goes pale and the white heading
+       text becomes unreadable. */
+    --tf-brand-navy: #0e2340;
 
     --tf-positive: #34d399;
     --tf-positive-soft: #10331e;

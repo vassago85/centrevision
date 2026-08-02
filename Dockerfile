@@ -1,4 +1,4 @@
-FROM php:8.3-fpm-alpine
+FROM php:8.4-fpm-alpine
 
 # System packages: nginx + supervisor to run web, netcat to wait for the DB in
 # the entrypoint, and the toolchain we need for composer + vite.

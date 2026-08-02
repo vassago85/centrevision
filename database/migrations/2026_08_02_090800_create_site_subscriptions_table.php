@@ -13,7 +13,7 @@ return new class extends Migration
             $table->foreignId('site_id')->constrained('sites')->cascadeOnDelete();
             $table->enum('base_tier', ['starter', 'standard', 'large', 'enterprise'])->default('starter');
             $table->decimal('base_fee', 12, 2)->default(0);
-            $table->decimal('variable_rate_per_camera_per_subuser', 12, 2)->default(18.00);
+            $table->decimal('variable_rate_per_camera_per_subuser', 12, 2)->default(20.00);
 
             // Stops an unusually shop-dense mall producing a runaway bill.
             $table->decimal('variable_fee_cap', 12, 2)->nullable();

@@ -15,7 +15,7 @@ use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
-new #[Title('Shops')] class extends Component {
+new #[Title('Sub-accounts')] class extends Component {
     public bool $showInvite = false;
 
     public ?int $siteId = null;
@@ -93,6 +93,48 @@ new #[Title('Shops')] class extends Component {
         return (float) $this->shops()
             ->filter(fn (Organization $shop) => $shop->shopSubscription?->status === SubscriptionStatus::Active)
             ->sum(fn (Organization $shop) => (float) $shop->shopSubscription->monthly_amount);
+    }
+
+    /**
+     * The rate the platform charges the owner per active camera per paying
+     * shop, per month. Exposed to the view so the pricing panel stays in
+     * sync when the platform changes it — no need to edit copy in Blade.
+     */
+    #[Computed]
+    public function variableRate(): float
+    {
+        return (float) config('trafficflow.variable_rate_per_camera_per_subuser');
+    }
+
+    /**
+     * The owner's current variable-fee footprint across every site they run,
+     * summed. This is what today's shops-and-cameras mix would cost on their
+     * next invoice, so the "how the variable fee works" panel can show a
+     * real number instead of only a hypothetical example.
+     *
+     * @return array{sites: int, cameras: int, paying_shops: int, monthly: float}
+     */
+    #[Computed]
+    public function variableFeeSummary(): array
+    {
+        $siteIds = $this->sites()->pluck('id');
+
+        $cameras = (int) \App\Models\Camera::query()
+            ->withoutGlobalScope(\App\Models\Scopes\SiteScope::class)
+            ->whereIn('site_id', $siteIds)
+            ->where('is_active', true)
+            ->count();
+
+        $payingShops = $this->shops()
+            ->filter(fn (Organization $shop) => $shop->shopSubscription?->status === SubscriptionStatus::Active)
+            ->count();
+
+        return [
+            'sites' => $siteIds->count(),
+            'cameras' => $cameras,
+            'paying_shops' => $payingShops,
+            'monthly' => round($cameras * $payingShops * $this->variableRate(), 2),
+        ];
     }
 
     public function invite(): void
@@ -199,13 +241,13 @@ new #[Title('Shops')] class extends Component {
 }; ?>
 
 <div>
-    <x-page-header title="Shops" subtitle="Tenants reselling access to this site's analytics">
+    <x-page-header title="Sub-accounts" subtitle="Tenants you resell centre-wide analytics to">
         <x-slot:actions>
             <flux:button size="sm" variant="primary" wire:click="openInvite">Invite shop</flux:button>
         </x-slot:actions>
     </x-page-header>
 
-    <div class="mb-7 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
+    <div class="mb-6 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
         <x-metric label="Shops" :value="$this->shops->count()" />
         <x-metric
             label="Paying"
@@ -213,6 +255,59 @@ new #[Title('Shops')] class extends Component {
             delta="Drives your variable fee"
         />
         <x-metric label="Shop revenue" :value="'R'.number_format($this->payingRevenue, 2)" delta="per month" />
+    </div>
+
+    {{-- ── How the variable fee works ─────────────────────────────────────
+         Explains where the "Drives your variable fee" number on the metric
+         above actually goes, and shows the owner's real footprint so they
+         can eyeball what they'd pay next month. --}}
+    @php($vf = $this->variableFeeSummary)
+    <div class="mb-7 flex items-start gap-4 rounded-tf border border-accent/30 bg-accent-soft p-5 dark:bg-accent-soft/40">
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-tf-sm">
+            <flux:icon icon="information-circle" class="size-5" />
+        </span>
+
+        <div class="flex-1 space-y-3 text-[13.5px] leading-relaxed">
+            <div>
+                <p class="text-[15px] font-semibold text-ink">How the variable fee works</p>
+                <p class="mt-1 text-ink-2">
+                    Every shop you resell centre analytics to adds a small variable fee to your monthly
+                    platform bill, on top of the base tier of each site. The rate is per active
+                    camera, per paying shop.
+                </p>
+            </div>
+
+            <div class="rounded-md border border-line bg-surface px-3 py-2.5 font-mono text-[13px] text-ink">
+                cameras × paying shops × R{{ number_format($this->variableRate, 2) }} = monthly variable fee
+            </div>
+
+            {{-- Live worked example using the owner's own totals so the
+                 number is theirs, not a hypothetical. --}}
+            <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <p class="text-ink-2">
+                    <span class="font-semibold text-ink">Your footprint:</span>
+                    {{ $vf['cameras'] }} active camera{{ $vf['cameras'] === 1 ? '' : 's' }}
+                    across {{ $vf['sites'] }} site{{ $vf['sites'] === 1 ? '' : 's' }} ·
+                    {{ $vf['paying_shops'] }} paying shop{{ $vf['paying_shops'] === 1 ? '' : 's' }}
+                    → {{ $vf['cameras'] }} × {{ $vf['paying_shops'] }} × R{{ number_format($this->variableRate, 2) }} =
+                    <span class="font-semibold text-ink">R{{ number_format($vf['monthly'], 2) }}/month</span>
+                </p>
+                <a
+                    href="{{ route('billing') }}"
+                    wire:navigate
+                    class="inline-flex items-center gap-1 whitespace-nowrap text-[12.5px] font-semibold text-accent hover:underline"
+                >
+                    See full invoice
+                    <flux:icon icon="arrow-right" class="size-3.5" />
+                </a>
+            </div>
+
+            <p class="text-[12.5px] text-ink-muted">
+                Trialing and suspended shops don't count — you only pay when a shop is actually paying you.
+                Shops that pay you more are still counted the same way; the variable fee is per shop, not
+                a percentage of what they pay. That's controlled separately in your billing settings.
+            </p>
+        </div>
     </div>
 
     <x-panel heading="Shops">

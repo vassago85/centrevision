@@ -115,7 +115,7 @@ return [
     'currency' => env('TRAFFICFLOW_CURRENCY', 'ZAR'),
 
     // Charged per camera, per paying shop sub-user, per month.
-    'variable_rate_per_camera_per_subuser' => (float) env('TRAFFICFLOW_VARIABLE_RATE_PER_CAMERA_PER_SUBUSER', 18.00),
+    'variable_rate_per_camera_per_subuser' => (float) env('TRAFFICFLOW_VARIABLE_RATE_PER_CAMERA_PER_SUBUSER', 20.00),
 
     // Suggested range an owner picks from when inviting a shop.
     'shop_monthly_amount_default' => 400.00,

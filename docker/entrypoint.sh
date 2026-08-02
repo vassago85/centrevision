@@ -63,6 +63,20 @@ echo "✅ Postgres is ready"
 echo "📦 Running migrations..."
 php artisan migrate --force || echo "⚠️  Migration had issues, continuing..."
 
+# First-boot seed: if the users table is empty, run DemoDataSeeder so there's
+# an owner account (owner@centrevision.co.za / password) plus a week of demo
+# traffic to explore. Once any real user exists this check quietly skips —
+# nothing overwrites live data.
+USER_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h db -U "$DB_USERNAME" -d "$DB_DATABASE" -tAc "SELECT COUNT(*) FROM users" 2>/dev/null || echo "unknown")
+if [ "$USER_COUNT" = "0" ]; then
+    echo "🌱 Empty users table — running DemoDataSeeder (this takes ~10s)..."
+    php artisan db:seed --force || echo "⚠️  Seeding had issues, continuing..."
+elif [ "$USER_COUNT" = "unknown" ]; then
+    echo "⚠️  Could not check users table — skipping demo seed"
+else
+    echo "✓ Users already present ($USER_COUNT rows) — skipping demo seed"
+fi
+
 # Env comes from docker at runtime, so DO NOT cache config — a cached config
 # would pin the values from build-time (empty). Just clear everything and let
 # Laravel resolve fresh on each request.

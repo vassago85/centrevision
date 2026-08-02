@@ -16,19 +16,14 @@
 
 <aside class="fixed inset-y-0 left-0 z-40 flex w-[264px] flex-col gap-3 border-r border-line bg-canvas p-4 max-lg:hidden">
 
-    {{-- Brand mark card — sits alone at the top so the logo has room to breathe. --}}
+    {{-- Brand card — the wordmark lockup gets its own white tile at the top
+         of the sidebar so the logo has breathing room and reads clearly. --}}
     <a
         href="{{ route(Navigation::homeRouteFor($user)) }}"
         wire:navigate
-        class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3.5 py-3 shadow-tf-sm transition-colors hover:bg-surface-2"
+        class="flex items-center justify-center rounded-xl border border-line bg-surface px-3 py-4 shadow-tf-sm transition-colors hover:bg-surface-2"
     >
-        <x-brand-mark class="!size-8 shrink-0" />
-        <span class="flex flex-col leading-none">
-            <span class="text-[14px] font-semibold tracking-tight">
-                <span class="text-ink">centre</span><span class="text-accent">vision</span>
-            </span>
-            <span class="mt-1 text-[10px] uppercase tracking-[0.18em] text-ink-muted">.co.za</span>
-        </span>
+        <x-brand variant="wordmark" />
     </a>
 
     {{-- Optional site scope pill: only rendered for tenants who have more than
@@ -108,7 +103,7 @@
 {{-- Mobile fallback: on <lg, the sidebar collapses to a strip along the top so
      users on small screens still get the same nav items without a hamburger. --}}
 <div class="mb-4 flex items-center gap-3 border-b border-line bg-canvas px-4 py-3 lg:hidden">
-    <x-brand class="flex-1" />
+    <x-brand variant="wordmark" class="flex-1" />
     <flux:dropdown position="bottom" align="end">
         <flux:button size="sm" variant="ghost" icon="bars-3" square />
         <flux:menu>

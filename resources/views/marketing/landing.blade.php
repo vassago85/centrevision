@@ -20,11 +20,8 @@
     {{-- ── Nav ──────────────────────────────────────────────────────────── --}}
     <header class="border-b border-line bg-surface/80 backdrop-blur">
         <div class="mx-auto flex max-w-[1200px] items-center justify-between gap-4 px-6 py-4 lg:px-10">
-            <a href="{{ route('home') }}" class="flex items-center gap-2.5">
-                <x-brand-mark class="!size-8" />
-                <span class="text-[15px] font-semibold tracking-tight">
-                    <span class="text-ink">centre</span><span class="text-accent">vision</span>
-                </span>
+            <a href="{{ route('home') }}">
+                <x-brand variant="wordmark" />
             </a>
 
             <nav class="flex items-center gap-2">
@@ -343,11 +340,8 @@
         <div class="mx-auto max-w-[1200px] px-6 lg:px-10">
             <div class="grid gap-8 md:grid-cols-4">
                 <div class="md:col-span-2">
-                    <a href="{{ route('home') }}" class="flex items-center gap-2.5">
-                        <x-brand-mark class="!size-8" />
-                        <span class="text-[15px] font-semibold tracking-tight">
-                            <span class="text-ink">centre</span><span class="text-accent">vision</span>
-                        </span>
+                    <a href="{{ route('home') }}" class="inline-flex">
+                        <x-brand variant="wordmark" />
                     </a>
                     <p class="mt-4 max-w-md text-sm leading-relaxed text-ink-2">
                         Number-plate analytics for shopping centres and mixed-use campuses. See every visit,

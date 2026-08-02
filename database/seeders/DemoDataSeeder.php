@@ -156,7 +156,7 @@ class DemoDataSeeder extends Seeder
         ]);
 
         User::create([
-            'name' => 'Pieter Charsley',
+            'name' => 'Paul Charsley',
             'email' => 'owner@centrevision.co.za',
             'password' => Hash::make(self::PASSWORD),
             'email_verified_at' => now(),

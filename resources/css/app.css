@@ -1,0 +1,161 @@
+@import 'tailwindcss';
+@import '../../vendor/livewire/flux/dist/flux.css';
+
+@source '../views';
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../vendor/livewire/flux-pro/stubs/**/*.blade.php';
+@source '../../vendor/livewire/flux/stubs/**/*.blade.php';
+
+/*
+ * Dark mode is driven by the .dark class, which Flux's appearance script sets
+ * from the user's choice of light / dark / system. System is the default, so
+ * out of the box the app follows prefers-color-scheme as the mockup does.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Palette from trafficflow-dashboard_1.html. The raw values live on :root and
+ * .dark so they can swap at runtime; @theme inline exposes them as Tailwind
+ * utilities (bg-surface, text-muted, border-line and so on).
+ */
+:root {
+    /* Page background — soft cool grey, so white cards read as raised. */
+    --tf-page: #f4f6fa;
+    --tf-canvas: #f4f6fa;
+    --tf-surface: #ffffff;
+    --tf-surface-2: #f4f6fa;
+    --tf-line: #e6e9ef;
+
+    --tf-ink: #0e1220;
+    --tf-ink-2: #495064;
+    --tf-ink-muted: #7c8195;
+
+    --tf-accent: #2563eb;
+    --tf-accent-2: #1d4fd8;
+    --tf-accent-soft: #e6efff;
+
+    /* CentreVision brand navy — the dark half of the mark. */
+    --tf-brand-navy: #0e2340;
+
+    --tf-positive: #10b981;
+    --tf-positive-soft: #dcfaee;
+
+    --tf-danger: #ef4444;
+    --tf-danger-soft: #fde7e7;
+
+    --tf-warning: #f59e0b;
+    --tf-warning-soft: #fef2d5;
+
+    /* Soft, layered shadows tuned for a light grey page. */
+    --tf-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+    --tf-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.dark {
+    --tf-page: #0d1017;
+    --tf-canvas: #0d1017;
+    --tf-surface: #171b25;
+    --tf-surface-2: #1e222d;
+    --tf-line: #262b38;
+
+    --tf-ink: #f5f6f8;
+    --tf-ink-2: #b7bcc9;
+    --tf-ink-muted: #7c8195;
+
+    --tf-accent: #4f8bef;
+    --tf-accent-2: #3e78dc;
+    --tf-accent-soft: #142236;
+
+    --tf-brand-navy: #d3dbe9;
+
+    --tf-positive: #34d399;
+    --tf-positive-soft: #10331e;
+
+    --tf-danger: #f87171;
+    --tf-danger-soft: #3a1e1c;
+
+    --tf-warning: #fbbf24;
+    --tf-warning-soft: #3a2c12;
+
+    --tf-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --tf-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+@theme inline {
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif,
+        'Apple Color Emoji', 'Segoe UI Emoji';
+
+    --color-page: var(--tf-page);
+    --color-canvas: var(--tf-canvas);
+    --color-surface: var(--tf-surface);
+    --color-surface-2: var(--tf-surface-2);
+    --color-line: var(--tf-line);
+
+    --color-ink: var(--tf-ink);
+    --color-ink-2: var(--tf-ink-2);
+    --color-ink-muted: var(--tf-ink-muted);
+
+    --color-accent: var(--tf-accent);
+    --color-accent-2: var(--tf-accent-2);
+    --color-accent-soft: var(--tf-accent-soft);
+    --color-accent-content: var(--tf-accent);
+    --color-accent-foreground: #ffffff;
+
+    --color-brand-navy: var(--tf-brand-navy);
+
+    --color-positive: var(--tf-positive);
+    --color-positive-soft: var(--tf-positive-soft);
+
+    --color-danger: var(--tf-danger);
+    --color-danger-soft: var(--tf-danger-soft);
+
+    --color-warning: var(--tf-warning);
+    --color-warning-soft: var(--tf-warning-soft);
+    --color-warn: var(--tf-warning);
+    --color-warn-soft: var(--tf-warning-soft);
+
+    /* Cards get a slightly softer round than the original prototype. */
+    --radius-tf: 12px;
+    --radius-tf-lg: 16px;
+
+    --shadow-tf-sm: var(--tf-shadow-sm);
+    --shadow-tf-md: var(--tf-shadow-md);
+}
+
+@layer base {
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--tf-line);
+    }
+
+    body {
+        line-height: 1.5;
+    }
+}
+
+/*
+ * The mockup drops the rule under the last row of a table, so a panel ends on
+ * whitespace rather than a hanging line. Rows carry their border as a utility,
+ * so this reaches past it rather than asking every page to remember.
+ */
+[data-tf-table] tbody > tr:last-child > td {
+    border-bottom-color: transparent;
+}
+
+/* Flux form controls, retinted to the TrafficFlow palette. */
+[data-flux-field]:not(ui-radio, ui-checkbox) {
+    @apply grid gap-2;
+}
+
+[data-flux-label] {
+    @apply !mb-0 !leading-tight;
+}
+
+input:focus[data-flux-control],
+textarea:focus[data-flux-control],
+select:focus[data-flux-control] {
+    @apply outline-hidden ring-2 ring-accent ring-offset-2 ring-offset-surface;
+}

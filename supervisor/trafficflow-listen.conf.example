@@ -1,0 +1,56 @@
+; TrafficFlow ISAPI alert-stream listeners.
+;
+; Run one listener process per camera. The command reconnects with backoff on
+; its own, so supervisor only needs to restart it if the process itself dies.
+;
+; Copy this file to /etc/supervisor/conf.d/, replace CAMERA_ID with the id from
+; the cameras table (one [program:] block per camera), then:
+;
+;   supervisorctl reread && supervisorctl update
+;
+; To list the cameras that need a listener:
+;
+;   php artisan tinker --execute="App\Models\Camera::where('is_active', true)->get(['id','name'])->each(fn(\$c) => print(\"{\$c->id}\t{\$c->name}\n\"));"
+
+[program:trafficflow-listen-CAMERA_ID]
+process_name=%(program_name)s
+command=php /opt/trafficflow/artisan traffic:listen CAMERA_ID
+directory=/opt/trafficflow
+autostart=true
+autorestart=true
+; The listener blocks on a socket indefinitely by design.
+startsecs=10
+stopwaitsecs=30
+; SIGTERM lets the command finish the event it is mid-way through parsing.
+stopsignal=TERM
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/log/trafficflow/listen-CAMERA_ID.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+
+; Queue worker for the ingestion sweep, visit matching and nightly tagging.
+[program:trafficflow-queue]
+process_name=%(program_name)s_%(process_num)02d
+command=php /opt/trafficflow/artisan queue:work --sleep=3 --tries=3 --max-time=3600
+directory=/opt/trafficflow
+autostart=true
+autorestart=true
+numprocs=2
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/log/trafficflow/queue.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+
+; Scheduler, which dispatches SweepFtpDropFolder, MatchVisits,
+; TagRecurringPlates and PrunePlateData.
+[program:trafficflow-scheduler]
+process_name=%(program_name)s
+command=php /opt/trafficflow/artisan schedule:work
+directory=/opt/trafficflow
+autostart=true
+autorestart=true
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/log/trafficflow/scheduler.log

@@ -1,0 +1,209 @@
+# CentreVision production stack — Ubuntu server behind Nginx Proxy Manager.
+#
+# `app` serves HTTP on ${APP_PORT:-8092}; put NPM in front for TLS and hostname
+# routing. `scheduler` runs artisan schedule:run once a minute (PrunePlateData,
+# MatchVisits, TagRecurringPlates, ScheduledReport). `queue` drains the redis
+# queue for report exports, invoice generation and partner payouts.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: centrevision-app:latest
+    container_name: centrevision-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8092}:80"
+    environment:
+      - APP_NAME=${APP_NAME:-CentreVision}
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_TIMEZONE=Africa/Johannesburg
+      - TZ=Africa/Johannesburg
+      - APP_URL=${APP_URL:?APP_URL must be set}
+      - APP_KEY=${APP_KEY:?APP_KEY must be set}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-centrevision}
+      - DB_USERNAME=${DB_USERNAME:-centrevision}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - MAIL_MAILER=${MAIL_MAILER:-log}
+      - MAIL_HOST=${MAIL_HOST:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@centrevision.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-CentreVision}
+      # Paystack (billing) — configure per-tenant later in the UI if left blank.
+      - PAYSTACK_PUBLIC_KEY=${PAYSTACK_PUBLIC_KEY:-}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-}
+      - TRAFFICFLOW_BILLING_EMAIL=${TRAFFICFLOW_BILLING_EMAIL:-billing@centrevision.co.za}
+      # NPM terminates TLS — trust its forwarded headers.
+      - TRUSTED_PROXIES=*
+    volumes:
+      - app-storage:/var/www/html/storage/app
+      - app-logs:/var/www/html/storage/logs
+      # Hikvision FTP drop is mounted from the host so the cameras can write
+      # to it directly (or you can point a separate FTP container at the same
+      # volume). Same directory the Sweep job scans.
+      - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+    networks:
+      - centrevision-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: centrevision-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_DATABASE:-centrevision}
+      - POSTGRES_USER=${DB_USERNAME:-centrevision}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - TZ=Africa/Johannesburg
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - centrevision-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-centrevision} -d ${DB_DATABASE:-centrevision}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: centrevision-redis
+    restart: unless-stopped
+    # Append-only persistence: queued invoice + payout jobs can sit here for
+    # hours during a billing run, and snapshot-only mode would silently drop
+    # them on an unclean restart.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - centrevision-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: centrevision-app:latest
+    container_name: centrevision-scheduler
+    restart: unless-stopped
+    # A minute-granularity loop is enough — the entrypoint has already prepped
+    # storage and clears caches once, so we bypass it here and run `schedule:run`
+    # directly to avoid re-clearing every 60s.
+    entrypoint: []
+    command: sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"
+    environment:
+      - APP_ENV=production
+      - APP_TIMEZONE=Africa/Johannesburg
+      - TZ=Africa/Johannesburg
+      - APP_URL=${APP_URL:?APP_URL must be set}
+      - APP_KEY=${APP_KEY:?APP_KEY must be set}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-centrevision}
+      - DB_USERNAME=${DB_USERNAME:-centrevision}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - MAIL_MAILER=${MAIL_MAILER:-log}
+      - MAIL_HOST=${MAIL_HOST:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@centrevision.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-CentreVision}
+      - PAYSTACK_PUBLIC_KEY=${PAYSTACK_PUBLIC_KEY:-}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-}
+      - TRAFFICFLOW_BILLING_EMAIL=${TRAFFICFLOW_BILLING_EMAIL:-billing@centrevision.co.za}
+    volumes:
+      - app-storage:/var/www/html/storage/app
+      - app-logs:/var/www/html/storage/logs
+      - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+    networks:
+      - centrevision-network
+    depends_on:
+      - app
+      - db
+      - redis
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: centrevision-app:latest
+    container_name: centrevision-queue
+    restart: unless-stopped
+    entrypoint: []
+    command: php /var/www/html/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+    environment:
+      - APP_ENV=production
+      - APP_TIMEZONE=Africa/Johannesburg
+      - TZ=Africa/Johannesburg
+      - APP_URL=${APP_URL:?APP_URL must be set}
+      - APP_KEY=${APP_KEY:?APP_KEY must be set}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-centrevision}
+      - DB_USERNAME=${DB_USERNAME:-centrevision}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - MAIL_MAILER=${MAIL_MAILER:-log}
+      - MAIL_HOST=${MAIL_HOST:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_ENCRYPTION=${MAIL_ENCRYPTION:-tls}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS:-noreply@centrevision.co.za}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-CentreVision}
+      - PAYSTACK_PUBLIC_KEY=${PAYSTACK_PUBLIC_KEY:-}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-}
+      - TRAFFICFLOW_BILLING_EMAIL=${TRAFFICFLOW_BILLING_EMAIL:-billing@centrevision.co.za}
+    volumes:
+      - app-storage:/var/www/html/storage/app
+      - app-logs:/var/www/html/storage/logs
+      - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+    networks:
+      - centrevision-network
+    depends_on:
+      - app
+      - db
+      - redis
+
+networks:
+  centrevision-network:
+    driver: bridge
+
+volumes:
+  app-storage:
+  app-logs:
+  db-data:
+  redis-data:
+  hik-drop:

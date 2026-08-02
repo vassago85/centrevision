@@ -96,6 +96,26 @@ new #[Title('Sub-accounts')] class extends Component {
     }
 
     /**
+     * Gross tenant billing split into what the platform keeps and what the
+     * owner walks away with. Lets the "you charge tenants" metric show both
+     * the top-line number and the net so the owner is not left doing mental
+     * arithmetic against their platform_shop_revenue_share.
+     *
+     * @return array{gross: float, platform_share: float, owner_share: float}
+     */
+    #[Computed]
+    public function tenantIncomeSplit(): array
+    {
+        $owner = app(Tenancy::class)->organization();
+
+        if ($owner === null) {
+            return ['gross' => 0.0, 'platform_share' => 0.0, 'owner_share' => 0.0];
+        }
+
+        return app(\App\Support\Billing\BillingCalculator::class)->shopRevenueSplit($owner);
+    }
+
+    /**
      * The rate the platform charges the owner per active camera per paying
      * shop, per month. Exposed to the view so the pricing panel stays in
      * sync when the platform changes it — no need to edit copy in Blade.
@@ -247,14 +267,20 @@ new #[Title('Sub-accounts')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
+    @php($income = $this->tenantIncomeSplit)
     <div class="mb-6 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        <x-metric label="Shops" :value="$this->shops->count()" />
+        <x-metric label="Shops" :value="$this->shops->count()" delta="Total tenants" />
         <x-metric
             label="Paying"
             :value="$this->shops->filter(fn ($shop) => $shop->shopSubscription?->status === App\Enums\SubscriptionStatus::Active)->count()"
-            delta="Drives your variable fee"
+            delta="Adds to your platform bill"
         />
-        <x-metric label="Shop revenue" :value="'R'.number_format($this->payingRevenue, 2)" delta="per month" />
+        <x-metric
+            label="You charge tenants"
+            :value="'R'.number_format($income['gross'], 2)"
+            :delta="'per month · you keep R'.number_format($income['owner_share'], 2).' after platform share'"
+            variant="positive"
+        />
     </div>
 
     {{-- ── How the variable fee works ─────────────────────────────────────
@@ -269,16 +295,17 @@ new #[Title('Sub-accounts')] class extends Component {
 
         <div class="flex-1 space-y-3 text-[13.5px] leading-relaxed">
             <div>
-                <p class="text-[15px] font-semibold text-ink">How the variable fee works</p>
+                <p class="text-[15px] font-semibold text-ink">What the platform charges you for tenants</p>
                 <p class="mt-1 text-ink-2">
-                    Every shop you resell centre analytics to adds a small variable fee to your monthly
-                    platform bill, on top of the base tier of each site. The rate is per active
-                    camera, per paying shop.
+                    The "You charge tenants" figure above is <em class="not-italic font-semibold text-ink">money coming
+                    in</em> — what your tenants pay you each month. Separately, the platform adds a small
+                    variable fee to <em class="not-italic font-semibold text-ink">your</em> monthly bill for
+                    every paying shop, at a per-camera rate:
                 </p>
             </div>
 
             <div class="rounded-md border border-line bg-surface px-3 py-2.5 font-mono text-[13px] text-ink">
-                cameras × paying shops × R{{ number_format($this->variableRate, 2) }} = monthly variable fee
+                cameras × paying shops × R{{ number_format($this->variableRate, 2) }} = added to your platform bill
             </div>
 
             {{-- Live worked example using the owner's own totals so the
@@ -291,6 +318,7 @@ new #[Title('Sub-accounts')] class extends Component {
                     {{ $vf['paying_shops'] }} paying shop{{ $vf['paying_shops'] === 1 ? '' : 's' }}
                     → {{ $vf['cameras'] }} × {{ $vf['paying_shops'] }} × R{{ number_format($this->variableRate, 2) }} =
                     <span class="font-semibold text-ink">R{{ number_format($vf['monthly'], 2) }}/month</span>
+                    added to your platform bill.
                 </p>
                 <a
                     href="{{ route('billing') }}"
@@ -303,9 +331,9 @@ new #[Title('Sub-accounts')] class extends Component {
             </div>
 
             <p class="text-[12.5px] text-ink-muted">
-                Trialing and suspended shops don't count — you only pay when a shop is actually paying you.
-                Shops that pay you more are still counted the same way; the variable fee is per shop, not
-                a percentage of what they pay. That's controlled separately in your billing settings.
+                Only paying shops count — trialing and suspended tenants are free. The fee scales by shop
+                count, not by how much you charge them. The platform's share of what you charge tenants
+                is set separately in Settings.
             </p>
         </div>
     </div>

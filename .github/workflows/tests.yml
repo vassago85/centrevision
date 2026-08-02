@@ -22,7 +22,9 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
-          php-version: '8.3'
+          # composer.lock resolves Symfony 8.x which requires PHP 8.4.1+.
+          # Keep this pinned to 8.4 to match the production Docker image.
+          php-version: '8.4'
           tools: composer:v2
           coverage: none
 

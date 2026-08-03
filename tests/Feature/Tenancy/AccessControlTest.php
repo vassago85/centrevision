@@ -15,10 +15,16 @@ beforeEach(function () {
     Camera::factory()->for($this->site)->create();
 });
 
-it('sends a user with no site to a dead end rather than an unscoped app', function () {
+it('funnels a brand new owner with no site to the sites page to set one up', function () {
     $orphan = User::factory()->ownerAdmin(Organization::factory()->owner()->create())->create();
 
-    $this->actingAs($orphan)->get(route('overview'))->assertForbidden();
+    // The overview would run against a zero-site scope and produce nothing
+    // meaningful, so we push the operator to the one page where they can
+    // actually do something useful — adding their first property.
+    $this->actingAs($orphan)->get(route('overview'))->assertRedirect(route('sites'));
+
+    // The Sites page itself stays reachable so the redirect isn't a loop.
+    $this->actingAs($orphan)->get(route('sites'))->assertOk();
 });
 
 it('keeps shop users out of owner only pages', function (string $route) {

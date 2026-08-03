@@ -16,6 +16,10 @@ use Illuminate\Support\Facades\Date;
 use Livewire\Livewire;
 
 beforeEach(function () {
+    // Pin the clock to the start of a month so factory-built sites are
+    // treated as full-period by the metered billing calculator.
+    Date::setTestNow('2026-06-01 00:00:00');
+
     $this->partner = Partner::factory()->create(['name' => 'Northgate Installs', 'commission_rate' => 0.20]);
 
     $this->owner = Organization::factory()->owner()->referredBy($this->partner)->create(['name' => 'Owner A']);

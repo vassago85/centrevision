@@ -21,6 +21,10 @@ class SiteCharge
         public readonly float $variableFee,
         public readonly float $uncappedVariableFee,
         public readonly ?float $variableFeeCap,
+        // 1.0 for a site that ran the full period, less for one that was
+        // added part-way through. Kept alongside the charged amounts so the
+        // invoice line can label a prorated month as such.
+        public readonly float $prorationFactor = 1.0,
     ) {}
 
     public function total(): float
@@ -34,6 +38,11 @@ class SiteCharge
             && $this->uncappedVariableFee > $this->variableFee;
     }
 
+    public function wasProrated(): bool
+    {
+        return $this->prorationFactor < 1.0;
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -44,6 +53,7 @@ class SiteCharge
             'cameras' => $this->cameraCount,
             'paying_shops' => $this->payingShopCount,
             'variable_fee_capped' => $this->wasCapped(),
+            'proration_factor' => $this->prorationFactor,
         ];
     }
 }

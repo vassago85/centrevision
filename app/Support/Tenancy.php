@@ -37,6 +37,20 @@ class Tenancy
         return $this;
     }
 
+    /**
+     * Drop the cached site collection so the next call to sites() re-reads
+     * from the database. Called after actions that mutate the tenant's site
+     * list (adding, renaming or deleting a site) so subsequent scoped queries
+     * within the same request see the change immediately instead of being
+     * masked by a stale cache.
+     */
+    public function refreshSites(): static
+    {
+        $this->sites = null;
+
+        return $this;
+    }
+
     public function user(): ?User
     {
         return $this->user;

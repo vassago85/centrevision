@@ -61,6 +61,32 @@ class Site extends Model implements SiteScoped
     }
 
     /**
+     * Attach a fresh subscription so metered billing has something to write
+     * lines against. Called explicitly by the Sites page when an owner adds
+     * a site through the UI — we don't hook it to a model event because
+     * seeders and factories already create their own SiteSubscription rows
+     * with specific tiers and caps and we don't want to duplicate that path.
+     *
+     * Idempotent: safe to call twice for the same site.
+     */
+    public function attachDefaultSubscription(): SiteSubscription
+    {
+        return SiteSubscription::firstOrCreate(
+            ['site_id' => $this->getKey()],
+            [
+                // The stored tier is a placeholder; BillingCalculator recomputes
+                // from the live camera count every run, so the site starts
+                // pointing at Starter and moves up organically as cameras arrive.
+                'base_tier' => \App\Enums\BaseTier::Starter,
+                'base_fee' => 0,
+                'variable_rate_per_camera_per_subuser' => (float) config('trafficflow.variable_rate_per_camera_per_subuser'),
+                'status' => \App\Enums\SubscriptionStatus::Active,
+                'current_period_ends_at' => now()->endOfMonth(),
+            ],
+        );
+    }
+
+    /**
      * Site is scoped on its own primary key rather than a site_id column.
      */
     public function siteScopeColumn(): string

@@ -28,9 +28,38 @@ class SitePolicy
         return in_array($site->getKey(), $this->tenancy->accessibleSiteIds(), true);
     }
 
+    /**
+     * Owners self-serve their own portfolio of sites. Platform admins can
+     * seed sites for any tenant. Shops cannot create sites, only occupy them.
+     */
+    public function create(User $user): bool
+    {
+        if ($user->isPlatformAdmin()) {
+            return true;
+        }
+
+        return $user->isOwnerAdmin() && $user->can('manage site settings');
+    }
+
     public function update(User $user, Site $site): bool
     {
         return $user->can('manage site settings') && $this->view($user, $site);
+    }
+
+    /**
+     * Deleting a site cascades cameras, plate events, invoices and shop
+     * assignments, which is destructive enough that only the owner of the
+     * site (or a platform admin) may authorise it.
+     */
+    public function delete(User $user, Site $site): bool
+    {
+        if ($user->isPlatformAdmin()) {
+            return true;
+        }
+
+        return $user->isOwnerAdmin()
+            && $user->can('manage site settings')
+            && $this->view($user, $site);
     }
 
     public function manageCameras(User $user, Site $site): bool

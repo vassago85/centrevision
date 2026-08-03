@@ -34,7 +34,9 @@ class InvoiceBuilder
             return $existing;
         }
 
-        $charges = $this->calculator->chargesForOwner($owner);
+        // Charges are proration-aware, so passing the period start keeps a
+        // site added on the 20th billed for the 20th → 30th only.
+        $charges = $this->calculator->chargesForOwner($owner, $period['start']);
 
         return DB::transaction(function () use ($owner, $period, $charges): Invoice {
             $invoice = $this->createInvoice($owner, $period, $charges->sum(fn (SiteCharge $c) => $c->total()));
@@ -101,10 +103,21 @@ class InvoiceBuilder
 
     protected function linesFor(Invoice $invoice, SiteCharge $charge): void
     {
+        // A brand-new site with zero cameras has no charge to write; skipping
+        // the lines entirely keeps the invoice tidy rather than parading three
+        // R0.00 rows at the operator.
+        if ($charge->total() <= 0.0 && $charge->cameraCount === 0) {
+            return;
+        }
+
+        $suffix = $charge->wasProrated()
+            ? sprintf(' (prorated %s%%)', number_format($charge->prorationFactor * 100, 1))
+            : '';
+
         $invoice->lines()->create([
             'site_id' => $charge->site->getKey(),
             'kind' => InvoiceLineKind::BaseFee,
-            'label' => $charge->site->name.' — '.$charge->tier->label().' base fee',
+            'label' => $charge->site->name.' — '.$charge->tier->label().' base fee'.$suffix,
             'amount' => $charge->baseFee,
             'meta' => $charge->meta(),
         ]);
@@ -113,7 +126,7 @@ class InvoiceBuilder
             $invoice->lines()->create([
                 'site_id' => $charge->site->getKey(),
                 'kind' => InvoiceLineKind::CameraSurcharge,
-                'label' => $charge->site->name.' — additional cameras',
+                'label' => $charge->site->name.' — additional cameras'.$suffix,
                 'amount' => $charge->cameraSurcharge,
                 'meta' => $charge->meta(),
             ]);
@@ -125,10 +138,11 @@ class InvoiceBuilder
             'site_id' => $charge->site->getKey(),
             'kind' => InvoiceLineKind::VariableFee,
             'label' => sprintf(
-                '%s — %d cameras × %d shops',
+                '%s — %d cameras × %d shops%s',
                 $charge->site->name,
                 $charge->cameraCount,
                 $charge->payingShopCount,
+                $suffix,
             ),
             'amount' => $charge->variableFee,
             'meta' => $charge->meta(),

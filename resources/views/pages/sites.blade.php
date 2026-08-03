@@ -1,11 +1,13 @@
 <?php
 
+use App\Enums\BaseTier;
 use App\Enums\CameraRole;
 use App\Enums\OrganizationType;
 use App\Enums\SubscriptionStatus;
 use App\Models\Camera;
 use App\Models\Organization;
 use App\Models\Site;
+use App\Support\Billing\BillingCalculator;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
@@ -14,6 +16,23 @@ use Livewire\Component;
 
 new #[Title('Sites')] class extends Component
 {
+    /** Null while adding, otherwise the id of the site being renamed. */
+    public ?int $editingId = null;
+
+    public bool $showForm = false;
+
+    public string $name = '';
+
+    public string $address = '';
+
+    protected function rules(): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:120'],
+            'address' => ['nullable', 'string', 'max:255'],
+        ];
+    }
+
     /**
      * Set the site switcher's current selection and jump to the overview.
      *
@@ -40,6 +59,80 @@ new #[Title('Sites')] class extends Component
     {
         session()->put('tenancy.site_id', null);
         $this->redirect(route('overview'), navigate: true);
+    }
+
+    /**
+     * Open the add-site form. We do this rather than using a "one big form"
+     * pattern so the operator's context (the list of existing sites) stays
+     * visible behind the modal.
+     */
+    public function add(): void
+    {
+        $this->authorize('create', Site::class);
+
+        $this->reset(['editingId', 'name', 'address']);
+        $this->resetValidation();
+        $this->showForm = true;
+    }
+
+    public function edit(int $siteId): void
+    {
+        $site = Site::findOrFail($siteId);
+        $this->authorize('update', $site);
+
+        $this->resetValidation();
+        $this->editingId = $site->getKey();
+        $this->name = $site->name;
+        $this->address = (string) $site->address;
+        $this->showForm = true;
+    }
+
+    public function save(): void
+    {
+        $this->validate();
+
+        if ($this->editingId === null) {
+            $this->authorize('create', Site::class);
+
+            $tenancy = app(Tenancy::class);
+            $owner = $tenancy->organization();
+
+            abort_if($owner === null || ! $owner->isOwner(), 403);
+
+            $site = Site::create([
+                'organization_id' => $owner->getKey(),
+                'name' => trim($this->name),
+                'address' => trim($this->address) ?: null,
+            ]);
+
+            // Attach a default (metered, Active) subscription so billing has
+            // a home for this site's charges from day one.
+            $site->attachDefaultSubscription();
+
+            // Drop the Tenancy site cache so any scoped query in the same
+            // request — including this component's next render — sees the new
+            // site rather than the pre-save list.
+            $tenancy->refreshSites();
+
+            Flux::toast(variant: 'success', text: '"'.$site->name.'" added. Add cameras to start metering.');
+        } else {
+            $site = Site::findOrFail($this->editingId);
+            $this->authorize('update', $site);
+
+            $site->update([
+                'name' => trim($this->name),
+                'address' => trim($this->address) ?: null,
+            ]);
+
+            app(Tenancy::class)->refreshSites();
+
+            Flux::toast(variant: 'success', text: 'Site updated.');
+        }
+
+        // Fresh render pulls the new/renamed site into the cards below and
+        // the site switcher in the sidebar.
+        unset($this->sites);
+        $this->showForm = false;
     }
 
     #[Computed]
@@ -89,16 +182,21 @@ new #[Title('Sites')] class extends Component
             $shop = $shopCounts->get($site->id);
             $last = $lastEvent->get($site->id);
 
+            $activeCameras = (int) ($cam->active ?? 0);
+
             return (object) [
                 'site' => $site,
                 'cameras_total' => (int) ($cam->total ?? 0),
-                'cameras_active' => (int) ($cam->active ?? 0),
+                'cameras_active' => $activeCameras,
                 'entrances' => Camera::query()
                     ->where('site_id', $site->id)
                     ->whereIn('role', [CameraRole::Entrance, CameraRole::Both])
                     ->count(),
                 'shops_total' => (int) ($shop->total ?? 0),
                 'shops_paying' => (int) ($shop->paying ?? 0),
+                // Metered pricing: the tier reflects the site's live camera
+                // count, and moves as cameras are added or retired.
+                'tier' => BaseTier::forCameraCount($activeCameras),
                 'last_event_at' => $last?->last_event_at ? \Illuminate\Support\Facades\Date::parse($last->last_event_at) : null,
             ];
         });
@@ -112,14 +210,46 @@ new #[Title('Sites')] class extends Component
 }; ?>
 
 <div>
-    <x-page-header title="Sites" subtitle="Every site this account owns, in one list. Click Focus to scope the rest of the app to that site.">
+    <x-page-header
+        title="Sites"
+        subtitle="Every property this account owns. Add a site, plug in cameras, and pricing meters itself against how many cameras that site actually runs."
+    >
         <x-slot name="actions">
-            <flux:button size="sm" variant="ghost" wire:click="viewAll">View all sites</flux:button>
+            @unless ($this->sites->isEmpty())
+                <flux:button size="sm" variant="ghost" wire:click="viewAll">View all sites</flux:button>
+            @endunless
+            <flux:button size="sm" variant="primary" icon="plus" wire:click="add">New site</flux:button>
         </x-slot>
     </x-page-header>
 
+    {{-- Metering explainer — kept low-key so it doesn't shout, but visible
+         enough that a new owner understands "cameras → tier → bill" before
+         they add their first site. --}}
+    <div class="mb-6 rounded-tf border border-line bg-surface-2 p-4 text-[13px] text-ink-2">
+        <p>
+            <span class="font-semibold text-ink">Metered pricing.</span>
+            Each site's monthly base is set by its <em class="not-italic font-semibold text-ink">live camera count</em> at billing time —
+            Starter up to 4 cameras (R{{ number_format(BaseTier::Starter->baseFee(), 0) }}),
+            Standard to 8 (R{{ number_format(BaseTier::Standard->baseFee(), 0) }}),
+            Large to 16 (R{{ number_format(BaseTier::Large->baseFee(), 0) }}),
+            Enterprise beyond that (R{{ number_format(BaseTier::Large->baseFee(), 0) }} +
+            R{{ number_format(BaseTier::ENTERPRISE_PER_CAMERA_FEE, 0) }}/extra camera).
+            No caps on how many sites you can add. A site with zero cameras costs nothing.
+        </p>
+    </div>
+
     @if ($this->sites->isEmpty())
-        <x-placeholder>No sites configured yet.</x-placeholder>
+        <div class="rounded-tf border border-dashed border-line bg-surface p-10 text-center">
+            <div class="mx-auto flex size-12 items-center justify-center rounded-full bg-accent-soft text-accent">
+                <flux:icon icon="building-office-2" class="size-6" />
+            </div>
+            <h2 class="mt-4 text-[15px] font-semibold text-ink">Add your first site</h2>
+            <p class="mx-auto mt-1 max-w-md text-[13px] text-ink-2">
+                A site is one property — a mall, a park, a business complex. You can add as many as you need;
+                billing only charges for the ones with cameras plugged in.
+            </p>
+            <flux:button class="mt-5" variant="primary" icon="plus" wire:click="add">New site</flux:button>
+        </div>
     @else
         <div class="grid gap-3 md:grid-cols-2">
             @foreach ($this->sites as $row)
@@ -133,16 +263,21 @@ new #[Title('Sites')] class extends Component
                     'border-line' => ! $isCurrent,
                 ])>
                     <header class="flex items-start justify-between gap-3">
-                        <div>
+                        <div class="min-w-0">
                             <h2 class="text-base font-semibold text-ink">{{ $row->site->name }}</h2>
                             @if ($row->site->address)
                                 <p class="text-[13px] text-ink-2">{{ $row->site->address }}</p>
                             @endif
                         </div>
 
-                        @if ($isCurrent)
-                            <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">In focus</span>
-                        @endif
+                        <div class="flex flex-col items-end gap-1.5">
+                            @if ($isCurrent)
+                                <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">In focus</span>
+                            @endif
+                            <span class="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
+                                {{ $row->tier->label() }} tier
+                            </span>
+                        </div>
                     </header>
 
                     <dl class="grid grid-cols-3 gap-3 text-[13px]">
@@ -177,6 +312,7 @@ new #[Title('Sites')] class extends Component
                             @unless ($isCurrent)
                                 <flux:button size="xs" variant="primary" wire:click="focus({{ $row->site->id }})">Focus here</flux:button>
                             @endunless
+                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $row->site->id }})">Rename</flux:button>
                             <flux:button size="xs" variant="ghost" :href="route('cameras')" wire:navigate>Cameras</flux:button>
                         </div>
                     </footer>
@@ -184,4 +320,40 @@ new #[Title('Sites')] class extends Component
             @endforeach
         </div>
     @endif
+
+    {{-- ── Add / rename site modal ─────────────────────────────────────
+         Kept small — a site is just a name and an address at this stage.
+         Cameras, subscriptions and shops are all set up on their own tabs. --}}
+    <flux:modal wire:model.self="showForm" class="md:w-[28rem]">
+        <form wire:submit="save" class="space-y-5">
+            <flux:heading size="lg">{{ $editingId ? 'Rename site' : 'Add site' }}</flux:heading>
+
+            <flux:input
+                wire:model="name"
+                label="Name"
+                placeholder="e.g. Menlyn Corner"
+                autofocus
+            />
+
+            <flux:input
+                wire:model="address"
+                label="Address (optional)"
+                placeholder="14 Atterbury Rd, Pretoria"
+            />
+
+            @if (! $editingId)
+                <div class="rounded-tf border border-line bg-surface-2 p-3 text-[12px] text-ink-2">
+                    A Starter subscription (R{{ number_format(BaseTier::Starter->baseFee(), 0) }}/month, up to 4 cameras)
+                    will attach automatically. You'll only be billed once you add a camera —
+                    a site with zero cameras costs nothing. As you add cameras the tier
+                    auto-adjusts on your next invoice.
+                </div>
+            @endif
+
+            <div class="flex justify-end gap-2">
+                <flux:button variant="ghost" type="button" @click="$dispatch('close')">Cancel</flux:button>
+                <flux:button variant="primary" type="submit">{{ $editingId ? 'Save' : 'Add site' }}</flux:button>
+            </div>
+        </form>
+    </flux:modal>
 </div>

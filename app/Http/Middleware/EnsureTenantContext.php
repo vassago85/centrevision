@@ -38,10 +38,19 @@ class EnsureTenantContext
         // silently ignored on every subsequent request.
         $request->session()->put(self::SESSION_KEY, $this->tenancy->currentSiteId());
 
-        // A tenant user whose organization has no site cannot be shown
-        // anything meaningful, and must not fall through to unscoped queries.
+        // A tenant user with no site of their own is either a brand new owner
+        // signing up (who must be allowed onto the Sites page to add their
+        // first property) or a shop whose invitation was never linked (who
+        // has nothing to look at). Owners are routed to Sites; anyone else
+        // is turned away rather than falling through to unscoped queries.
         if (! $user->isPlatformAdmin() && $this->tenancy->sites()->isEmpty()) {
-            abort(403, 'Your account is not linked to a site yet.');
+            if ($user->isOwnerAdmin() && ! $request->routeIs('sites')) {
+                return redirect()->route('sites');
+            }
+
+            if (! $user->isOwnerAdmin()) {
+                abort(403, 'Your account is not linked to a site yet.');
+            }
         }
 
         return $next($request);

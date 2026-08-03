@@ -12,6 +12,12 @@ use App\Support\Billing\InvoiceBuilder;
 use Illuminate\Support\Facades\Date;
 
 beforeEach(function () {
+    // Sites created after a billing period starts are prorated by day count,
+    // so we pin the clock to the start of the period before creating anything.
+    // This mirrors the realistic case where a site has already been running
+    // for the full month by the time its invoice is generated.
+    Date::setTestNow('2026-06-15');
+
     $this->owner = Organization::factory()->owner()->create(['name' => 'Owner A']);
     $this->siteA = Site::factory()->for_($this->owner)->create(['name' => 'Mall A']);
     $this->siteB = Site::factory()->for_($this->owner)->create(['name' => 'Mall B']);

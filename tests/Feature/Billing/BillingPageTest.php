@@ -14,6 +14,11 @@ use App\Support\Billing\PaymentProcessor;
 use Livewire\Livewire;
 
 beforeEach(function () {
+    // Pin the clock to the start of a month so sites created in the setup
+    // are considered "full-period" by the metered calculator — otherwise
+    // proration would silently reduce every asserted amount below.
+    \Illuminate\Support\Facades\Date::setTestNow('2026-06-01 00:00:00');
+
     $this->gateway = new FakePaymentGateway;
     $this->app->instance(PaymentGateway::class, $this->gateway);
 

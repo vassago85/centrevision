@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AuthenticateHikCamera;
 use App\Http\Middleware\EnsureSubscriptionActive;
 use App\Http\Middleware\EnsureTenantContext;
 use Illuminate\Foundation\Application;
@@ -21,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'subscribed' => EnsureSubscriptionActive::class,
             'role' => RoleMiddleware::class,
             'permission' => PermissionMiddleware::class,
+            'auth.hik-camera' => AuthenticateHikCamera::class,
         ]);
 
         // Production sits behind Nginx Proxy Manager (or any reverse proxy)
@@ -31,10 +33,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // exposes the app to something other than a controlled proxy.
         $middleware->trustProxies(at: '*');
 
-        // The gateway has no session and therefore no token; the webhook's
-        // own signature check is what authenticates it.
+        // Neither the payment gateway nor Hikvision cameras hold a session,
+        // so there is no CSRF token to send. Each endpoint carries its own
+        // authentication: signature check for Paystack, HTTP Basic against
+        // the per-camera webhook_secret for Hikvision.
         $middleware->validateCsrfTokens(except: [
             'webhooks/paystack',
+            'webhooks/hik/*',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

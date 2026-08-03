@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\CameraRole;
+use App\Enums\IngestionMode;
 use App\Models\Camera;
 use App\Models\Site;
 use App\Services\Isapi\AlertStreamListener;
@@ -23,6 +24,8 @@ new #[Title('Cameras')] class extends Component {
 
     public string $role = 'entrance';
 
+    public string $ingestionMode = 'webhook';
+
     public string $ipAddress = '';
 
     public string $isapiUsername = '';
@@ -34,6 +37,24 @@ new #[Title('Cameras')] class extends Component {
 
     public bool $isActive = true;
 
+    /** Camera the setup modal is open for; null when the modal is closed. */
+    public ?int $setupCameraId = null;
+
+    public bool $showSetup = false;
+
+    /**
+     * Plaintext webhook secret to render in the setup modal. Populated when
+     * the modal opens and wiped when it closes so the value is not shipped
+     * back on every subsequent Livewire request.
+     */
+    public string $revealedSecret = '';
+
+    /**
+     * True right after a create or regenerate; drives the "you will not see
+     * this again" nudge so operators actually copy the secret.
+     */
+    public bool $secretJustGenerated = false;
+
     protected function rules(): array
     {
         return [
@@ -42,7 +63,13 @@ new #[Title('Cameras')] class extends Component {
             'siteId' => ['required', 'integer', Rule::in(app(Tenancy::class)->accessibleSiteIds())],
             'name' => ['required', 'string', 'max:120'],
             'role' => ['required', Rule::enum(CameraRole::class)],
-            'ipAddress' => ['required', 'string', 'max:120'],
+            'ingestionMode' => ['required', Rule::enum(IngestionMode::class)],
+            // Stream-mode cameras have to be addressable; webhook and FTP
+            // cameras dial home, so a placeholder or empty value is fine.
+            'ipAddress' => [
+                Rule::requiredIf(fn () => $this->ingestionMode === IngestionMode::Stream->value),
+                'nullable', 'string', 'max:120',
+            ],
             'isapiUsername' => ['nullable', 'string', 'max:120'],
             'isapiPassword' => ['nullable', 'string', 'max:255'],
             'channelId' => ['required', 'integer', 'min:1', 'max:64'],
@@ -73,6 +100,7 @@ new #[Title('Cameras')] class extends Component {
 
         $this->siteId = app(Tenancy::class)->currentSiteId() ?? $this->sites()->first()?->getKey();
         $this->role = CameraRole::Entrance->value;
+        $this->ingestionMode = IngestionMode::Webhook->value;
         $this->channelId = 1;
         $this->isActive = true;
         $this->showForm = true;
@@ -89,6 +117,7 @@ new #[Title('Cameras')] class extends Component {
         $this->siteId = $camera->site_id;
         $this->name = $camera->name;
         $this->role = $camera->role->value;
+        $this->ingestionMode = $camera->ingestion_mode->value;
         $this->ipAddress = $camera->ip_address;
         $this->isapiUsername = $camera->isapi_username ?? '';
         $this->isapiPassword = '';
@@ -108,7 +137,8 @@ new #[Title('Cameras')] class extends Component {
             'site_id' => $site->getKey(),
             'name' => $this->name,
             'role' => $this->role,
-            'ip_address' => $this->ipAddress,
+            'ingestion_mode' => $this->ingestionMode,
+            'ip_address' => $this->ipAddress ?: '0.0.0.0',
             'isapi_username' => $this->isapiUsername ?: null,
             'channel_id' => $this->channelId,
             'is_active' => $this->isActive,
@@ -120,19 +150,86 @@ new #[Title('Cameras')] class extends Component {
             $attributes['isapi_password'] = $this->isapiPassword;
         }
 
-        if ($this->editingId === null) {
-            Camera::create($attributes);
+        $isNew = $this->editingId === null;
+
+        if ($isNew) {
+            $camera = Camera::create($attributes);
         } else {
-            Camera::findOrFail($this->editingId)->update($attributes);
+            $camera = Camera::findOrFail($this->editingId);
+            $camera->update($attributes);
         }
 
         unset($this->cameras);
         $this->showForm = false;
 
-        Flux::toast(
-            variant: 'success',
-            text: $this->name.' saved. It will start feeding events on the next sweep.',
-        );
+        // Freshly-created webhook cameras jump straight into the setup panel:
+        // the operator needs the URL and secret to configure the device, and
+        // it saves them hunting for the button they have not seen yet.
+        if ($isNew && $camera->ingestion_mode !== IngestionMode::Stream) {
+            $this->openSetup($camera->id, justGenerated: true);
+        } else {
+            Flux::toast(
+                variant: 'success',
+                text: $this->name.' saved.',
+            );
+        }
+    }
+
+    /**
+     * Open the "Set up in camera" modal, showing the webhook URL and current
+     * secret so the operator can copy them into the Hikvision UI.
+     */
+    public function openSetup(int $cameraId, bool $justGenerated = false): void
+    {
+        $camera = Camera::findOrFail($cameraId);
+        $this->authorize('manageCameras', $camera->site);
+
+        $this->setupCameraId = $camera->getKey();
+        $this->revealedSecret = (string) $camera->webhook_secret;
+        $this->secretJustGenerated = $justGenerated;
+        $this->showSetup = true;
+    }
+
+    public function closeSetup(): void
+    {
+        // Wipe the plaintext so it does not travel back on unrelated requests.
+        $this->setupCameraId = null;
+        $this->revealedSecret = '';
+        $this->secretJustGenerated = false;
+        $this->showSetup = false;
+    }
+
+    /**
+     * Regenerate the shared secret. The plaintext is only ever readable once
+     * (via the setup modal that opens immediately after), because subsequent
+     * page loads re-read the encrypted-at-rest value and reveal it again on
+     * demand — but the intent here is: "this is your fresh one, copy it now".
+     */
+    public function regenerateSecret(int $cameraId): void
+    {
+        $camera = Camera::findOrFail($cameraId);
+        $this->authorize('manageCameras', $camera->site);
+
+        $secret = $camera->regenerateWebhookSecret();
+
+        $this->setupCameraId = $camera->getKey();
+        $this->revealedSecret = $secret;
+        $this->secretJustGenerated = true;
+        $this->showSetup = true;
+
+        Flux::toast(variant: 'success', text: 'New secret generated. Update the camera now.');
+    }
+
+    /**
+     * The camera currently loaded in the setup modal. Null when the modal is
+     * closed so the Blade side can early-return without extra null checks.
+     */
+    #[Computed]
+    public function setupCamera(): ?Camera
+    {
+        return $this->setupCameraId === null
+            ? null
+            : Camera::find($this->setupCameraId);
     }
 
     public function delete(int $cameraId): void
@@ -208,7 +305,7 @@ new #[Title('Cameras')] class extends Component {
 
     <x-panel heading="Devices">
         <x-data-table
-            :headers="['Camera', 'Site', 'Role', 'Address', 'Status', 'Last event', ['label' => '', 'align' => 'right']]"
+            :headers="['Camera', 'Site', 'Role', 'Mode', 'Status', 'Last event', ['label' => '', 'align' => 'right']]"
             :is-empty="$this->cameras->isEmpty()"
             empty="No cameras yet. Add the first one to start ingesting plates."
         >
@@ -216,10 +313,27 @@ new #[Title('Cameras')] class extends Component {
                 @php($status = $this->status($camera))
 
                 <tr wire:key="camera-{{ $camera->id }}">
-                    <td class="border-b border-line py-2 font-medium">{{ $camera->name }}</td>
+                    <td class="border-b border-line py-2 font-medium">
+                        {{ $camera->name }}
+                        {{-- The address only matters for stream-mode cameras;
+                             hiding it for webhook devices avoids drawing eyes
+                             to a value the app never actually uses. --}}
+                        @if ($camera->ingestion_mode === App\Enums\IngestionMode::Stream && $camera->ip_address)
+                            <div class="mt-0.5 font-mono text-[11px] font-normal text-ink-muted">{{ $camera->ip_address }}</div>
+                        @endif
+                    </td>
                     <td class="border-b border-line py-2 text-ink-2">{{ $camera->site->name }}</td>
                     <td class="border-b border-line py-2 text-ink-2">{{ $camera->role->label() }}</td>
-                    <td class="border-b border-line py-2 font-mono text-xs text-ink-2">{{ $camera->ip_address }}</td>
+                    <td class="border-b border-line py-2">
+                        <x-badge :tone="$camera->ingestion_mode === App\Enums\IngestionMode::Webhook ? 'accent' : 'neutral'">
+                            {{ match ($camera->ingestion_mode) {
+                                App\Enums\IngestionMode::Webhook => 'Webhook',
+                                App\Enums\IngestionMode::Stream => 'ISAPI stream',
+                                App\Enums\IngestionMode::Ftp => 'FTP',
+                                App\Enums\IngestionMode::Auto => 'Any',
+                            } }}
+                        </x-badge>
+                    </td>
                     <td class="border-b border-line py-2">
                         <x-badge :tone="$status['tone']">{{ $status['label'] }}</x-badge>
                     </td>
@@ -228,7 +342,12 @@ new #[Title('Cameras')] class extends Component {
                     </td>
                     <td class="border-b border-line py-2 text-right">
                         <div class="flex justify-end gap-1">
-                            <flux:button size="xs" variant="ghost" wire:click="probe({{ $camera->id }})">Test</flux:button>
+                            @if ($camera->ingestion_mode !== App\Enums\IngestionMode::Stream)
+                                <flux:button size="xs" variant="ghost" wire:click="openSetup({{ $camera->id }})">Setup</flux:button>
+                            @endif
+                            @if ($camera->ingestion_mode->needsInboundReach())
+                                <flux:button size="xs" variant="ghost" wire:click="probe({{ $camera->id }})">Test</flux:button>
+                            @endif
                             <flux:button size="xs" variant="ghost" wire:click="edit({{ $camera->id }})">Edit</flux:button>
                             <flux:button
                                 size="xs"
@@ -261,28 +380,151 @@ new #[Title('Cameras')] class extends Component {
                 @endforeach
             </flux:select>
 
-            <div class="grid grid-cols-3 gap-3">
-                <flux:input wire:model="ipAddress" label="IP address" class="col-span-2" placeholder="10.0.1.21" />
-                <flux:input wire:model="channelId" type="number" label="Channel" />
-            </div>
+            <flux:select
+                wire:model.live="ingestionMode"
+                label="Ingestion mode"
+                description="Webhook: camera POSTs events to us over HTTPS (no VPN needed). Stream: we hold an ISAPI connection to it. FTP: legacy fallback."
+            >
+                @foreach (App\Enums\IngestionMode::cases() as $case)
+                    <flux:select.option :value="$case->value">{{ $case->label() }}</flux:select.option>
+                @endforeach
+            </flux:select>
 
-            <div class="grid grid-cols-2 gap-3">
-                <flux:input wire:model="isapiUsername" label="ISAPI user" autocomplete="off" />
-                <flux:input
-                    wire:model="isapiPassword"
-                    type="password"
-                    label="ISAPI password"
-                    autocomplete="new-password"
-                    :placeholder="$editingId ? 'Unchanged' : ''"
-                />
-            </div>
+            {{-- Stream-mode cameras must be addressable on the LAN, so they
+                 need an IP + ISAPI credentials. Webhook/FTP dial home, so the
+                 same fields are optional — hide them by default to keep the
+                 add-camera flow short. --}}
+            @if ($ingestionMode === App\Enums\IngestionMode::Stream->value)
+                <div class="grid grid-cols-3 gap-3">
+                    <flux:input wire:model="ipAddress" label="IP address" class="col-span-2" placeholder="10.0.1.21" />
+                    <flux:input wire:model="channelId" type="number" label="Channel" />
+                </div>
 
-            <flux:switch wire:model="isActive" label="Active" description="Inactive cameras are skipped by the listener and the drop-folder sweep." />
+                <div class="grid grid-cols-2 gap-3">
+                    <flux:input wire:model="isapiUsername" label="ISAPI user" autocomplete="off" />
+                    <flux:input
+                        wire:model="isapiPassword"
+                        type="password"
+                        label="ISAPI password"
+                        autocomplete="new-password"
+                        :placeholder="$editingId ? 'Unchanged' : ''"
+                    />
+                </div>
+            @else
+                <flux:input wire:model="channelId" type="number" label="Channel" description="Rarely more than 1 on a bullet camera; keep as-is unless the model does multi-channel LPR." />
+            @endif
+
+            <flux:switch wire:model="isActive" label="Active" description="Inactive cameras stop accepting webhooks and are skipped by the listener and drop-folder sweep." />
 
             <div class="flex justify-end gap-2">
                 <flux:button variant="ghost" type="button" wire:click="$set('showForm', false)">Cancel</flux:button>
                 <flux:button variant="primary" type="submit">Save camera</flux:button>
             </div>
         </form>
+    </flux:modal>
+
+    {{-- ── Camera setup modal ────────────────────────────────────────────
+         Shows the webhook URL + secret and step-by-step setup instructions
+         so the operator can copy them straight into the Hikvision UI. --}}
+    <flux:modal wire:model.self="showSetup" @close="$wire.closeSetup()" class="md:w-[36rem]">
+        @if ($this->setupCamera)
+            <div class="space-y-5">
+                <div>
+                    <flux:heading size="lg">Set up "{{ $this->setupCamera->name }}"</flux:heading>
+                    <p class="mt-1 text-sm text-ink-2">
+                        Configure the camera to POST its plate events to CentreVision. It dials out
+                        over HTTPS, so no VPN or port forwarding is needed on the site's network.
+                    </p>
+                </div>
+
+                @if ($secretJustGenerated)
+                    <div class="rounded-tf border border-warn/40 bg-warn-soft p-3 text-[13px] text-ink">
+                        <p class="font-semibold">Copy the secret now.</p>
+                        <p class="mt-0.5 text-ink-2">
+                            It stays visible until you close this dialog. You can reveal it again later
+                            from this page, or regenerate it if it is lost.
+                        </p>
+                    </div>
+                @endif
+
+                <div
+                    x-data="{
+                        show: false,
+                        copy(text, label) {
+                            navigator.clipboard.writeText(text);
+                            this.$dispatch('toast', { variant: 'success', text: label + ' copied.' });
+                        },
+                    }"
+                    class="space-y-3"
+                >
+                    <div>
+                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL</label>
+                        <div class="mt-1 flex gap-2">
+                            <input
+                                type="text"
+                                readonly
+                                value="{{ $this->setupCamera->webhookUrl() }}"
+                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
+                            />
+                            <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrl() }}', 'URL')">Copy</flux:button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="text-[13px] font-medium text-ink-2">HTTP Basic username</label>
+                        <div class="mt-1 flex gap-2">
+                            <input
+                                type="text"
+                                readonly
+                                value="{{ $this->setupCamera->id }}"
+                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
+                            />
+                            <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->id }}', 'Username')">Copy</flux:button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="text-[13px] font-medium text-ink-2">HTTP Basic password (secret)</label>
+                        <div class="mt-1 flex gap-2">
+                            <input
+                                :type="show ? 'text' : 'password'"
+                                readonly
+                                value="{{ $revealedSecret }}"
+                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
+                            />
+                            <flux:button size="sm" variant="ghost" @click="show = ! show" x-text="show ? 'Hide' : 'Show'">Show</flux:button>
+                            <flux:button size="sm" variant="ghost" @click="copy('{{ $revealedSecret }}', 'Secret')">Copy</flux:button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-tf border border-line bg-surface-2 p-4 text-[13px]">
+                    <p class="mb-2 font-semibold text-ink">Steps in the Hikvision UI</p>
+                    <ol class="ml-4 list-decimal space-y-1 text-ink-2">
+                        <li>Log into the camera as admin.</li>
+                        <li>
+                            <span class="font-medium text-ink">Configuration → Network → Advanced Settings → HTTP Listening</span>:
+                            enable it, paste the URL above, set Protocol to <code>HTTP</code> (the reverse proxy handles TLS),
+                            HTTP Method to <code>POST</code>, Data Type to <code>XML</code>, User Name to the camera id, and Password to the secret.
+                        </li>
+                        <li>
+                            <span class="font-medium text-ink">Configuration → Event → Smart Event → Road Traffic → Vehicle Detection</span>:
+                            on the <span class="font-medium text-ink">Linkage Method</span> tab, tick
+                            <span class="font-medium text-ink">HTTP Listening</span> (and any other channels you want; this one is required).
+                        </li>
+                        <li>Save. Drive a plate past and watch the "Last event" column on this page tick over.</li>
+                    </ol>
+                </div>
+
+                <div class="flex items-center justify-between gap-2">
+                    <flux:button
+                        variant="ghost"
+                        wire:click="regenerateSecret({{ $this->setupCamera->id }})"
+                        wire:confirm="Generate a new secret? The camera will stop authenticating until you update its config."
+                    >Regenerate secret</flux:button>
+                    <flux:button variant="primary" wire:click="closeSetup">Done</flux:button>
+                </div>
+            </div>
+        @endif
     </flux:modal>
 </div>

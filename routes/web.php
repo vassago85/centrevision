@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Billing\PaymentCallbackController;
 use App\Http\Controllers\Billing\PaystackWebhookController;
+use App\Http\Controllers\HikvisionWebhookController;
 use App\Support\Navigation;
 use Illuminate\Support\Facades\Route;
 
@@ -20,6 +21,15 @@ Route::get('/', function () {
 // The gateway calls this one, so it carries no session and is authenticated by
 // its signature instead.
 Route::post('webhooks/paystack', PaystackWebhookController::class)->name('webhooks.paystack');
+
+// Hikvision cameras post plate events here over HTTPS. The camera holds the
+// connection open until we answer, so the handler stages the payload and
+// dispatches a queued job — everything database-facing runs on the worker.
+// AuthenticateHikCamera enforces HTTP Basic against the per-camera secret.
+Route::post('webhooks/hik/{camera}', HikvisionWebhookController::class)
+    ->where('camera', '[0-9]+')
+    ->middleware(['auth.hik-camera', 'throttle:hik-webhook'])
+    ->name('webhooks.hik');
 
 // Guests arrive here from an owner's invitation email and register their shop.
 Route::livewire('shop-invitations/{token}', 'pages::shop-invitation')->name('shop-invitations.show');

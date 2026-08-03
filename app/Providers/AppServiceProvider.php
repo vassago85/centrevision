@@ -7,8 +7,11 @@ use App\Support\Billing\Gateway\PaymentGateway;
 use App\Support\Billing\Gateway\PaystackGateway;
 use App\Support\Tenancy;
 use Carbon\CarbonImmutable;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use RuntimeException;
@@ -54,6 +57,23 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+        $this->configureRateLimiting();
+    }
+
+    /**
+     * Per-camera rate limit for the Hikvision HTTP Listening webhook. A busy
+     * LPR camera at rush hour emits a handful of events per minute; 60/sec
+     * is well above that but far below what an unauthenticated flooder could
+     * push through, and cheap enough to burst on if a camera reconnects with
+     * a backlog.
+     */
+    protected function configureRateLimiting(): void
+    {
+        RateLimiter::for('hik-webhook', function (Request $request) {
+            $cameraId = (int) $request->route('camera');
+
+            return Limit::perSecond(60)->by('hik:'.$cameraId);
+        });
     }
 
     /**

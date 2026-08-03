@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\CameraRole;
+use App\Enums\IngestionMode;
 use App\Models\Concerns\ScopedToSite;
 use App\Models\Contracts\SiteScoped;
 use App\Models\Scopes\SiteScope;
@@ -15,6 +16,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
 
 /**
  * A Hikvision LPR camera feeding plate events for a site.
@@ -28,30 +30,61 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $isapi_password
  * @property int $channel_id
  * @property bool $is_active
+ * @property IngestionMode $ingestion_mode
+ * @property string|null $webhook_secret
  * @property CarbonInterface|null $last_event_at
  * @property CarbonInterface|null $last_probe_ok_at
  * @property string|null $last_probe_error
+ * @property CarbonInterface|null $webhook_last_seen_at
  */
 #[Fillable([
     'site_id', 'name', 'role', 'ip_address', 'isapi_username',
-    'isapi_password', 'channel_id', 'is_active',
+    'isapi_password', 'channel_id', 'is_active', 'ingestion_mode',
+    'webhook_secret',
 ])]
-#[Hidden(['isapi_password'])]
+// isapi_password AND webhook_secret are both device credentials; neither should
+// ever land in an API response or serialised model.
+#[Hidden(['isapi_password', 'webhook_secret'])]
 #[ScopedBy(SiteScope::class)]
 class Camera extends Model implements SiteScoped
 {
     /** @use HasFactory<CameraFactory> */
     use HasFactory, ScopedToSite;
 
+    /**
+     * A camera in webhook or auto mode must always have a shared secret; the
+     * incoming request has nothing else to authenticate against. This hook
+     * fires on both create and update so switching an existing stream-mode
+     * camera to webhook mode from the UI never leaves it un-authenticatable.
+     * Callers can supply their own secret first for tests and seeds.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $camera): void {
+            $needsSecret = in_array(
+                $camera->ingestion_mode ?? IngestionMode::Webhook,
+                [IngestionMode::Webhook, IngestionMode::Auto],
+                strict: true,
+            );
+
+            if ($needsSecret && ($camera->webhook_secret === null || $camera->webhook_secret === '')) {
+                $camera->webhook_secret = self::generateWebhookSecret();
+            }
+        });
+    }
+
     protected function casts(): array
     {
         return [
             'role' => CameraRole::class,
+            'ingestion_mode' => IngestionMode::class,
             'isapi_password' => 'encrypted',
+            'webhook_secret' => 'encrypted',
             'channel_id' => 'integer',
             'is_active' => 'boolean',
             'last_event_at' => 'datetime',
             'last_probe_ok_at' => 'datetime',
+            'webhook_last_seen_at' => 'datetime',
         ];
     }
 
@@ -89,14 +122,49 @@ class Camera extends Model implements SiteScoped
     }
 
     /**
-     * A camera is considered reachable if it produced an event or answered a
-     * probe within the staleness window.
+     * The URL the camera should POST HTTP Listening events to. Camera-side
+     * config also needs Basic Auth with username = camera id, password =
+     * webhook_secret.
+     */
+    public function webhookUrl(): string
+    {
+        return url("/webhooks/hik/{$this->getKey()}");
+    }
+
+    /**
+     * Regenerate the shared secret and persist. Returns the fresh plaintext
+     * so it can be shown to the operator exactly once; on subsequent renders
+     * it is only available via the encrypted cast.
+     */
+    public function regenerateWebhookSecret(): string
+    {
+        $secret = self::generateWebhookSecret();
+
+        $this->forceFill(['webhook_secret' => $secret])->save();
+
+        return $secret;
+    }
+
+    /**
+     * A 32-byte URL-safe token, generated the same way regardless of caller.
+     */
+    public static function generateWebhookSecret(): string
+    {
+        return Str::random(48);
+    }
+
+    /**
+     * A camera is considered reachable if it produced an event, answered a
+     * probe, or sent a webhook within the staleness window. Webhook cameras
+     * never answer probes (they only speak outbound), so this is the only
+     * signal we have for them.
      */
     public function isReachable(): bool
     {
         $threshold = now()->subMinutes((int) config('trafficflow.camera_stale_after_minutes'));
 
         return ($this->last_event_at !== null && $this->last_event_at->greaterThan($threshold))
-            || ($this->last_probe_ok_at !== null && $this->last_probe_ok_at->greaterThan($threshold));
+            || ($this->last_probe_ok_at !== null && $this->last_probe_ok_at->greaterThan($threshold))
+            || ($this->webhook_last_seen_at !== null && $this->webhook_last_seen_at->greaterThan($threshold));
     }
 }

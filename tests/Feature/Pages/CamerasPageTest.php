@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\CameraRole;
+use App\Enums\IngestionMode;
 use App\Models\Camera;
 use App\Models\Organization;
 use App\Models\PlateEvent;
@@ -107,3 +108,78 @@ it('reports a camera as unreachable once it goes quiet', function () {
         ->assertSeeInOrder(['Silent camera', 'Unreachable'])
         ->assertSeeInOrder(['Live camera', 'Online']);
 });
+
+it('creates a webhook camera without requiring an IP address', function () {
+    Livewire::test('pages::cameras')
+        ->call('add')
+        ->set('name', 'Office ANPR')
+        ->set('role', CameraRole::Entrance->value)
+        ->set('ingestionMode', IngestionMode::Webhook->value)
+        // Deliberately leave ipAddress blank.
+        ->call('save')
+        ->assertHasNoErrors()
+        // Fresh webhook cameras land in the setup modal so the operator
+        // sees the URL and secret without having to hunt for them.
+        ->assertSet('showSetup', true);
+
+    $camera = Camera::where('name', 'Office ANPR')->sole();
+
+    expect($camera->ingestion_mode)->toBe(IngestionMode::Webhook)
+        ->and($camera->webhook_secret)->not->toBeEmpty();
+});
+
+it('still requires an IP address for stream cameras', function () {
+    Livewire::test('pages::cameras')
+        ->call('add')
+        ->set('name', 'North stream')
+        ->set('ingestionMode', IngestionMode::Stream->value)
+        ->set('ipAddress', '')
+        ->call('save')
+        ->assertHasErrors('ipAddress');
+});
+
+it('opens the setup modal for an existing webhook camera', function () {
+    $camera = Camera::factory()
+        ->for($this->site)
+        ->webhook('office-secret')
+        ->create(['name' => 'Front gate']);
+
+    Livewire::test('pages::cameras')
+        ->call('openSetup', $camera->id)
+        ->assertSet('showSetup', true)
+        ->assertSet('setupCameraId', $camera->id)
+        ->assertSet('revealedSecret', 'office-secret');
+});
+
+it('regenerates the webhook secret and shows the new value', function () {
+    $camera = Camera::factory()
+        ->for($this->site)
+        ->webhook('office-secret')
+        ->create();
+
+    Livewire::test('pages::cameras')
+        ->call('regenerateSecret', $camera->id)
+        ->assertSet('showSetup', true)
+        ->assertSet('secretJustGenerated', true);
+
+    // Round-trip through the DB so the encrypted cast decrypts on read.
+    expect($camera->fresh()->webhook_secret)->not->toBe('office-secret');
+});
+
+it('wipes the revealed secret from state when the modal closes', function () {
+    $camera = Camera::factory()->for($this->site)->webhook('office-secret')->create();
+
+    Livewire::test('pages::cameras')
+        ->call('openSetup', $camera->id)
+        ->assertSet('revealedSecret', 'office-secret')
+        ->call('closeSetup')
+        ->assertSet('revealedSecret', '')
+        ->assertSet('showSetup', false)
+        ->assertSet('setupCameraId', null);
+});
+
+it('will not let one owner regenerate another owner camera secret', function () {
+    $foreign = Camera::factory()->webhook('other-secret')->create();
+
+    Livewire::test('pages::cameras')->call('regenerateSecret', $foreign->id);
+})->throws(ModelNotFoundException::class);

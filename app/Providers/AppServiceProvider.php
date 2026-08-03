@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Http\Middleware\EnsureSubscriptionActive;
+use App\Http\Middleware\EnsureTenantContext;
 use App\Support\Billing\Gateway\FakePaymentGateway;
 use App\Support\Billing\Gateway\PaymentGateway;
 use App\Support\Billing\Gateway\PaystackGateway;
@@ -14,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
+use Livewire\Livewire;
 use RuntimeException;
 
 class AppServiceProvider extends ServiceProvider
@@ -58,6 +61,27 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureDefaults();
         $this->configureRateLimiting();
+        $this->configureLivewire();
+    }
+
+    /**
+     * Livewire's /livewire/update endpoint re-applies only a hardcoded set of
+     * middleware to the fake request it builds for the origin route — auth,
+     * SubstituteBindings, and a few Sanctum/Jetstream classes. Anything else
+     * declared on the origin route is silently dropped, so tenant scoping,
+     * subscription gating and role checks never run for wire:click / wire:model
+     * interactions. Registering our own middleware here plugs them back into
+     * that pipeline so every Livewire interaction sees the same guardrails as
+     * a full page load.
+     */
+    protected function configureLivewire(): void
+    {
+        Livewire::addPersistentMiddleware([
+            EnsureTenantContext::class,
+            EnsureSubscriptionActive::class,
+            \Spatie\Permission\Middleware\RoleMiddleware::class,
+            \Spatie\Permission\Middleware\PermissionMiddleware::class,
+        ]);
     }
 
     /**

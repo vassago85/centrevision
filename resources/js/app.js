@@ -54,6 +54,13 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            // Chart.js queues each draw through requestAnimationFrame. On a
+            // Livewire re-render the canvas can be detached between the RAF
+            // being scheduled and it firing, which is what caused the
+            // "Cannot read properties of null (reading 'save')" crash — the
+            // frame tried to draw on a canvas whose 2D context had gone away.
+            // Skipping the animation removes that RAF window entirely.
+            animation: false,
             plugins: {
                 legend: showLegend
                     ? {
@@ -103,36 +110,68 @@ document.addEventListener('alpine:init', () => {
                 attributes: true,
                 attributeFilter: ['class'],
             });
-
-            // Livewire may replace the dataset when the date range changes.
-            this.$watch('$el.dataset.values', () => this.render());
         },
 
         destroy() {
             this.observer?.disconnect();
-            this.chart?.destroy();
+            this.safeDestroy();
+        },
+
+        /**
+         * Chart.js keeps a per-canvas instance registry. When Livewire's
+         * morphdom pass swaps the canvas without our destroy() running (which
+         * can happen even under wire:ignore if a sibling forces a re-flow),
+         * the old instance stays registered against the fresh canvas and its
+         * next draw crashes on a null context. Chart.getChart(canvas) surfaces
+         * whatever is actually attached to the DOM node so we can dispose of
+         * it before mounting a fresh chart.
+         */
+        safeDestroy() {
+            const canvas = this.$refs?.canvas;
+
+            const attached = canvas ? Chart.getChart(canvas) : null;
+
+            if (attached && attached !== this.chart) {
+                try { attached.destroy(); } catch (_) { /* already gone */ }
+            }
+
+            if (this.chart) {
+                try { this.chart.destroy(); } catch (_) { /* already gone */ }
+                this.chart = null;
+            }
         },
 
         render() {
-            this.chart?.destroy();
+            this.safeDestroy();
 
             const canvas = this.$refs.canvas;
 
-            if (!canvas) {
+            // Bail if the canvas has been ripped out from under us or has no
+            // paintable area yet — Chart.js crashes on a 0x0 context. Alpine
+            // will call render() again on the next observed change.
+            if (!canvas || !canvas.isConnected || canvas.offsetParent === null) {
                 return;
             }
 
-            this.chart = new Chart(
-                canvas,
-                barChartConfig({
-                    labels: config.labels ?? [],
-                    values: config.values ?? [],
-                    series: config.series,
-                    color: config.color ?? 'accent',
-                    maxBarThickness: config.maxBarThickness ?? 20,
-                    showLegend: config.showLegend ?? false,
-                })
-            );
+            try {
+                this.chart = new Chart(
+                    canvas,
+                    barChartConfig({
+                        labels: config.labels ?? [],
+                        values: config.values ?? [],
+                        series: config.series,
+                        color: config.color ?? 'accent',
+                        maxBarThickness: config.maxBarThickness ?? 20,
+                        showLegend: config.showLegend ?? false,
+                    })
+                );
+            } catch (error) {
+                // A crash while drawing must not tear the whole page down —
+                // the KPI cards, tables and the rest of the dashboard are
+                // more important than one canvas.
+                console.error('Chart render failed:', error);
+                this.chart = null;
+            }
         },
     }));
 });

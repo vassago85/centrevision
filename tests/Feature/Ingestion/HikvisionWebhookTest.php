@@ -145,6 +145,35 @@ it('refuses a request with no Authorization header', function () {
     postHikWebhook($this->camera, hikXml(), 'application/xml', auth: null)->assertStatus(401);
 });
 
+it('reconstructs a multipart body from parsed $_POST + $_FILES when php://input is drained', function () {
+    // Symfony's test client, given a "files" array, will build a multipart
+    // form-data request and let PHP populate $_POST / $_FILES — exactly the
+    // same shape the controller sees behind PHP-FPM. The raw body ($request
+    // ->getContent()) is empty in this mode; the controller has to rebuild
+    // it from the parsed data or the parser will see nothing.
+    $tmpXml = tempnam(sys_get_temp_dir(), 'hik-xml-').'.xml';
+    file_put_contents($tmpXml, hikXml(plate: 'MP12CD', direction: 'forward'));
+    $upload = new \Illuminate\Http\UploadedFile($tmpXml, 'anpr.xml', 'application/xml', null, true);
+
+    $server = ['HTTP_AUTHORIZATION' => 'Basic '.base64_encode($this->camera->id.':office-secret')];
+
+    test()->call(
+        'POST',
+        '/webhooks/hik/'.$this->camera->id,
+        [],
+        [],
+        ['anpr' => $upload],
+        $server,
+        '',
+    )->assertOk();
+
+    $event = PlateEvent::withoutGlobalScope(SiteScope::class)->sole();
+
+    expect($event->plate_number)->toBe('MP12CD')
+        ->and($event->direction)->toBe(PlateDirection::In)
+        ->and($event->camera_id)->toBe($this->camera->id);
+});
+
 it('accepts a request whose secret is passed as a URL path segment', function () {
     // Newer Hikvision "Alarm Server" firmware has no auth fields — the
     // camera can only paste a URL. This variant carries the secret as the

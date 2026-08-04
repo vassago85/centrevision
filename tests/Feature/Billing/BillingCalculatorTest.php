@@ -244,3 +244,36 @@ it('bills nothing when the site did not yet exist for the requested period', fun
     expect($charge->prorationFactor)->toBe(0.0)
         ->and($charge->total())->toBe(0.0);
 });
+
+// ── Security operator seats ────────────────────────────────────────────────
+
+it('counts every security operator seat under an owner organization', function () {
+    \App\Models\User::factory()->securityOperator($this->owner)->count(4)->create();
+
+    // A guard in someone else's org must not leak in.
+    \App\Models\User::factory()->securityOperator()->create();
+
+    expect($this->calculator->securityOperatorSeatCount($this->owner))->toBe(4);
+});
+
+it('charges the configured seat rate for each operator', function () {
+    \App\Models\User::factory()->securityOperator($this->owner)->count(3)->create();
+
+    $expected = 3 * (float) config('trafficflow.security_operator_monthly_amount');
+
+    expect($this->calculator->securityOperatorSeatCharge($this->owner))->toBe($expected);
+});
+
+it('collapses the seat charge to zero when the owner has no operators', function () {
+    expect($this->calculator->securityOperatorSeatCharge($this->owner))->toBe(0.0);
+});
+
+it('rolls the seat charge into the owner monthly total', function () {
+    Camera::factory()->count(3)->for($this->site)->create();
+    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+
+    $seatTotal = 2 * (float) config('trafficflow.security_operator_monthly_amount');
+    $siteTotal = $this->calculator->chargeForSite($this->site)->total();
+
+    expect($this->calculator->ownerTotal($this->owner))->toBe(round($siteTotal + $seatTotal, 2));
+});

@@ -129,3 +129,29 @@ it('is safe to run the monthly job twice', function () {
 
     expect(Invoice::count())->toBe(1);
 });
+
+it('appends a security operator seats line and adds it to the invoice total', function () {
+    // Two operators × the configured seat rate is a flat added charge that
+    // does not multiply with cameras or shops.
+    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+
+    $rate = (float) config('trafficflow.security_operator_monthly_amount');
+
+    $invoice = $this->builder->forOwner($this->owner, $this->period);
+
+    $line = $invoice->lines->firstWhere('kind', InvoiceLineKind::SecurityOperatorSeats);
+
+    expect($line)->not->toBeNull()
+        ->and((float) $line->amount)->toBe(round(2 * $rate, 2))
+        ->and($line->label)->toContain('2 ×')
+        ->and($line->site_id)->toBeNull()
+        ->and($line->meta['seats'])->toBe(2)
+        // The total picks up the seat line on top of the two sites.
+        ->and((float) $invoice->amount)->toBe(round(5000.00 + 2 * $rate, 2));
+});
+
+it('omits the security operator seats line when there are no operators', function () {
+    $invoice = $this->builder->forOwner($this->owner, $this->period);
+
+    expect($invoice->lines->firstWhere('kind', InvoiceLineKind::SecurityOperatorSeats))->toBeNull();
+});

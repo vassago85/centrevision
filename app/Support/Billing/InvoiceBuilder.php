@@ -38,11 +38,35 @@ class InvoiceBuilder
         // site added on the 20th billed for the 20th → 30th only.
         $charges = $this->calculator->chargesForOwner($owner, $period['start']);
 
-        return DB::transaction(function () use ($owner, $period, $charges): Invoice {
-            $invoice = $this->createInvoice($owner, $period, $charges->sum(fn (SiteCharge $c) => $c->total()));
+        // Seat-based line is flat across all sites, so it lives on the owner
+        // invoice as its own single line rather than being folded into any
+        // one site's charge.
+        $operatorSeats = $this->calculator->securityOperatorSeatCount($owner);
+        $operatorSeatTotal = $this->calculator->securityOperatorSeatCharge($owner);
+
+        return DB::transaction(function () use ($owner, $period, $charges, $operatorSeats, $operatorSeatTotal): Invoice {
+            $subtotal = $charges->sum(fn (SiteCharge $c) => $c->total()) + $operatorSeatTotal;
+
+            $invoice = $this->createInvoice($owner, $period, $subtotal);
 
             foreach ($charges as $charge) {
                 $this->linesFor($invoice, $charge);
+            }
+
+            if ($operatorSeats > 0) {
+                $rate = (float) config('trafficflow.security_operator_monthly_amount');
+
+                $invoice->lines()->create([
+                    'site_id' => null,
+                    'kind' => InvoiceLineKind::SecurityOperatorSeats,
+                    'label' => sprintf(
+                        'Security operator seats — %d × R%s',
+                        $operatorSeats,
+                        number_format($rate, 2),
+                    ),
+                    'amount' => $operatorSeatTotal,
+                    'meta' => ['seats' => $operatorSeats, 'rate' => $rate],
+                ]);
             }
 
             return $invoice->load('lines');

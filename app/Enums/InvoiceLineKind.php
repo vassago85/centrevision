@@ -9,6 +9,7 @@ enum InvoiceLineKind: string
     case CameraSurcharge = 'camera_surcharge';
     case ShopRevenueShare = 'shop_revenue_share';
     case ShopSubscription = 'shop_subscription';
+    case SecurityOperatorSeats = 'security_operator_seats';
     case Adjustment = 'adjustment';
 
     public function label(): string
@@ -19,6 +20,7 @@ enum InvoiceLineKind: string
             self::CameraSurcharge => 'Additional cameras',
             self::ShopRevenueShare => 'Shop revenue share',
             self::ShopSubscription => 'Shop subscription',
+            self::SecurityOperatorSeats => 'Security operator seats',
             self::Adjustment => 'Adjustment',
         };
     }

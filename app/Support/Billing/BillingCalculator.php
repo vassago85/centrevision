@@ -5,12 +5,14 @@ namespace App\Support\Billing;
 use App\Enums\BaseTier;
 use App\Enums\OrganizationType;
 use App\Enums\SubscriptionStatus;
+use App\Enums\UserRole;
 use App\Models\Camera;
 use App\Models\Organization;
 use App\Models\Scopes\SiteScope;
 use App\Models\ShopSubscription;
 use App\Models\Site;
 use App\Models\SiteSubscription;
+use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
@@ -114,9 +116,38 @@ class BillingCalculator
     public function ownerTotal(Organization $owner, ?CarbonInterface $periodStart = null): float
     {
         return round(
-            $this->chargesForOwner($owner, $periodStart)->sum(fn (SiteCharge $charge) => $charge->total()),
+            $this->chargesForOwner($owner, $periodStart)->sum(fn (SiteCharge $charge) => $charge->total())
+                + $this->securityOperatorSeatCharge($owner),
             2,
         );
+    }
+
+    /**
+     * The number of security operator seats an owner is currently paying for.
+     * Recomputed live so a seat removed today is not billed for tomorrow.
+     */
+    public function securityOperatorSeatCount(Organization $owner): int
+    {
+        return User::query()
+            ->where('organization_id', $owner->getKey())
+            ->where('role', UserRole::SecurityOperator)
+            ->count();
+    }
+
+    /**
+     * Flat charge: (seats) × (configured monthly rate). Independent of camera
+     * count and shop count on purpose — a seat is a seat regardless of how
+     * busy the site is.
+     */
+    public function securityOperatorSeatCharge(Organization $owner): float
+    {
+        $count = $this->securityOperatorSeatCount($owner);
+
+        if ($count === 0) {
+            return 0.0;
+        }
+
+        return round($count * (float) config('trafficflow.security_operator_monthly_amount'), 2);
     }
 
     /**

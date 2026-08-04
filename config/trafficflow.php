@@ -146,6 +146,7 @@ return [
     */
 
     'billing_email' => env('TRAFFICFLOW_BILLING_EMAIL', 'billing@centrevision.co.za'),
+    'support_email' => env('TRAFFICFLOW_SUPPORT_EMAIL', 'support@centrevision.co.za'),
 
     /*
     |--------------------------------------------------------------------------

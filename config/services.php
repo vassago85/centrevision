@@ -17,11 +17,19 @@ return [
     'paystack' => [
         'secret' => env('PAYSTACK_SECRET_KEY'),
         'public' => env('PAYSTACK_PUBLIC_KEY'),
+        'webhook_secret' => env('PAYSTACK_WEBHOOK_SECRET'),
         'base_url' => env('PAYSTACK_BASE_URL', 'https://api.paystack.co'),
     ],
 
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
+    ],
+
+    'mailgun' => [
+        'domain' => env('MAILGUN_DOMAIN'),
+        'secret' => env('MAILGUN_SECRET'),
+        'endpoint' => env('MAILGUN_ENDPOINT', 'api.mailgun.net'),
+        'scheme' => 'https',
     ],
 
     'resend' => [

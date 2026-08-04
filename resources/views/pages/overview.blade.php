@@ -219,6 +219,25 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * The last handful of visits at the tenant's site(s), used by the
+     * "Latest visits" card. Owner-only: shop accounts see aggregate KPIs
+     * only, never individual plates.
+     *
+     * @return Collection<int, Visit>
+     */
+    #[Computed]
+    public function latestVisits(): Collection
+    {
+        if (! $this->canSeePlates()) {
+            return collect();
+        }
+
+        return $this->analytics()
+            ->recentVisits($this->range(), 6)
+            ->each(fn (Visit $v) => $v->makeVisible('plate_number'));
+    }
+
+    /**
      * Security and watchlist cards are operator content, not tenant content.
      * We reuse `canSeePlates` because it is the same "you can see individual
      * vehicles" gate — shops get the aggregate view either way.
@@ -456,6 +475,62 @@ new #[Title('Dashboard')] class extends Component
         </x-panel-card>
         @endif
     </div>
+
+    {{-- ── Latest visits ────────────────────────────────────────────────
+         Owner-only, and only rendered when we actually have plates to show:
+         a shop account, or an owner with no traffic yet, gets nothing rather
+         than an empty "0 rows" table. --}}
+    @if ($this->canSeePlates && $this->latestVisits->isNotEmpty())
+    <div class="mb-6">
+        <x-panel-card>
+            <x-slot:header>
+                <div class="flex items-center gap-3">
+                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
+                        <flux:icon icon="truck" class="size-4" />
+                    </span>
+                    <div>
+                        <p class="text-[13px] font-semibold text-ink">Latest visits</p>
+                        <p class="text-[11.5px] text-ink-muted">Most recent vehicles detected</p>
+                    </div>
+                </div>
+                <a href="{{ route('reports') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
+            </x-slot:header>
+
+            <table class="w-full text-[13px]">
+                <thead>
+                    <tr class="text-left text-[11px] uppercase tracking-[0.14em] text-ink-muted">
+                        <th class="pb-2 font-semibold">Plate</th>
+                        <th class="pb-2 font-semibold">Entered</th>
+                        <th class="pb-2 font-semibold">Entry point</th>
+                        <th class="pb-2 text-right font-semibold">Dwell</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($this->latestVisits as $visit)
+                        <tr class="border-t border-line" wire:key="latest-visit-{{ $visit->id }}">
+                            <td class="py-2 font-mono font-semibold text-ink">
+                                {{ App\Support\PlateNumber::forDisplay($visit->plate_number) }}
+                            </td>
+                            <td class="py-2 text-ink-2">
+                                {{ $visit->entered_at->format('D H:i') }}
+                            </td>
+                            <td class="py-2 text-ink-2">
+                                {{ $visit->entryEvent?->camera?->name ?? '—' }}
+                            </td>
+                            <td class="py-2 text-right tabular-nums text-ink-2">
+                                @if ($visit->status === \App\Enums\VisitStatus::Open)
+                                    <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
+                                @else
+                                    {{ number_format((int) $visit->dwell_minutes) }} min
+                                @endif
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </x-panel-card>
+    </div>
+    @endif
 
     {{-- Footer band --}}
     <div class="flex items-center justify-between border-t border-line pt-4 text-[11.5px] text-ink-muted">

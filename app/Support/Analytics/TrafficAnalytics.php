@@ -231,8 +231,14 @@ class TrafficAnalytics
      */
     public function recentVisits(DateRange $range, int $limit = 10): Collection
     {
+        // Eager-load the entry event's camera so the dashboard's "Latest
+        // visits" card can render an entry point without an N+1 walk.
         return $this->baseQuery($range)
-            ->with('site:id,name')
+            ->with([
+                'site:id,name',
+                'entryEvent:id,camera_id',
+                'entryEvent.camera:id,name',
+            ])
             ->orderByDesc('entered_at')
             ->limit($limit)
             ->get();

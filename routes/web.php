@@ -49,12 +49,20 @@ Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
         Route::livewire('overview', 'pages::overview')->name('overview');
         Route::livewire('reports', 'pages::reports')->name('reports');
 
-        // Owner-only. Shops get aggregates for their site and nothing else.
-        Route::middleware('role:owner_admin')->group(function () {
-            Route::livewire('sites', 'pages::sites')->name('sites');
+        // Security operators are hired by the owner to watch plates all day
+        // long, so they need the security tools even though they can't spend
+        // the owner's money.
+        Route::middleware('role:owner_admin|security_operator')->group(function () {
             Route::livewire('cameras', 'pages::cameras')->name('cameras');
             Route::livewire('security', 'pages::security')->name('security');
             Route::livewire('watchlist', 'pages::watchlist')->name('watchlist');
+        });
+
+        // Owner-only. Shops get aggregates for their site and nothing else,
+        // and security operators are deliberately kept away from anything
+        // that changes billing, sites or shops.
+        Route::middleware('role:owner_admin')->group(function () {
+            Route::livewire('sites', 'pages::sites')->name('sites');
             Route::livewire('shops', 'pages::shops')->name('shops');
             Route::livewire('settings', 'pages::settings')->name('settings');
         });

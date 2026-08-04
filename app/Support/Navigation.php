@@ -24,6 +24,7 @@ class Navigation
         return match (true) {
             $user->isPlatformAdmin() => self::platform(),
             $user->isOwnerAdmin() => self::owner(),
+            $user->isSecurityOperator() => self::securityOperator(),
             $user->isShopUser() => self::shop(),
             default => [],
         };
@@ -65,6 +66,23 @@ class Navigation
     {
         return [
             ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
+            ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar'],
+        ];
+    }
+
+    /**
+     * A hired guard's toolset: watch plates, curate the watchlist, verify a
+     * camera is alive. No sites, shops, billing or settings.
+     *
+     * @return list<array{label: string, route: string, icon: string, tone?: string}>
+     */
+    protected static function securityOperator(): array
+    {
+        return [
+            ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
+            ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera'],
+            ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger'],
+            ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger'],
             ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar'],
         ];
     }

@@ -447,6 +447,14 @@ new #[Title('Cameras')] class extends Component {
                     </div>
                 @endif
 
+                @php
+                    $webhookHost   = parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_HOST);
+                    $webhookScheme = parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_SCHEME);
+                    $webhookPath   = parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_PATH);
+                    $webhookPort   = $webhookScheme === 'https' ? 443 : 80;
+                    $webhookIsTls  = $webhookScheme === 'https';
+                @endphp
+
                 <div
                     x-data="{
                         show: false,
@@ -455,10 +463,72 @@ new #[Title('Cameras')] class extends Component {
                             this.$dispatch('toast', { variant: 'success', text: label + ' copied.' });
                         },
                     }"
-                    class="space-y-3"
+                    class="space-y-4"
                 >
+                    {{-- Primary copy panel: the four values the Hikvision UI wants,
+                         laid out in the same order the camera page presents them.
+                         Colour-tinted so it clearly reads as "these are the fields
+                         you paste into the camera". --}}
+                    <div class="rounded-tf border border-accent/40 bg-accent-soft p-4">
+                        <p class="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-accent">
+                            Paste these into the camera's Alarm Server / HTTP Listening page
+                        </p>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="col-span-2">
+                                <label class="text-[12px] font-medium text-ink-2">1 · Destination IP or Host Name</label>
+                                <div class="mt-1 flex gap-2">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        value="{{ $webhookHost }}"
+                                        class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[13px] font-semibold text-ink"
+                                    />
+                                    <flux:button size="sm" variant="ghost" @click="copy('{{ $webhookHost }}', 'Host')">Copy</flux:button>
+                                </div>
+                                <p class="mt-1 text-[11px] text-ink-muted">Hostname only — no <code>{{ $webhookScheme }}://</code>, no <code>/</code>.</p>
+                            </div>
+
+                            <div class="col-span-2">
+                                <label class="text-[12px] font-medium text-ink-2">2 · URL (path)</label>
+                                <div class="mt-1 flex gap-2">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        value="{{ $webhookPath }}"
+                                        class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[13px] text-ink"
+                                    />
+                                    <flux:button size="sm" variant="ghost" @click="copy('{{ $webhookPath }}', 'Path')">Copy</flux:button>
+                                </div>
+                                <p class="mt-1 text-[11px] text-ink-muted">Starts with <code>/</code>. The trailing segment is this camera's authentication secret.</p>
+                            </div>
+
+                            <div>
+                                <label class="text-[12px] font-medium text-ink-2">3 · Protocol Type</label>
+                                <div class="mt-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[13px] font-semibold text-ink">
+                                    {{ strtoupper($webhookScheme) }}
+                                </div>
+                                @if ($webhookIsTls)
+                                    <p class="mt-1 text-[11px] text-ink-muted">TLS is handled by our reverse proxy — pick <code>HTTPS</code>.</p>
+                                @else
+                                    <p class="mt-1 text-[11px] text-ink-muted">Plain HTTP — TLS is not configured for this install.</p>
+                                @endif
+                            </div>
+
+                            <div>
+                                <label class="text-[12px] font-medium text-ink-2">4 · Port</label>
+                                <div class="mt-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[13px] font-semibold text-ink">
+                                    {{ $webhookPort }}
+                                </div>
+                                <p class="mt-1 text-[11px] text-ink-muted">Standard {{ strtoupper($webhookScheme) }} port.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {{-- Fallback: some newer firmwares only have one URL field. Give
+                         the operator the fully-assembled URL for that case. --}}
                     <div>
-                        <label class="text-[13px] font-medium text-ink-2">Full URL (with secret in path)</label>
+                        <label class="text-[13px] font-medium text-ink-2">Full URL (for cameras with a single URL field)</label>
                         <div class="mt-1 flex gap-2">
                             <input
                                 type="text"
@@ -468,84 +538,59 @@ new #[Title('Cameras')] class extends Component {
                             />
                             <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrlWithToken() }}', 'URL')">Copy</flux:button>
                         </div>
-                        <p class="mt-1 text-[12px] text-ink-muted">
-                            If the camera has one <em class="not-italic font-medium">URL</em> field, paste this whole string in.
-                            If it splits <em class="not-italic font-medium">Destination IP / Host Name</em> and <em class="not-italic font-medium">URL</em>, use the two split values below instead.
+                        <p class="mt-1 text-[11px] text-ink-muted">
+                            Paste this into a single <em class="not-italic font-medium">URL</em> field only when the camera's page has no separate host/path/port controls.
                         </p>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-3 rounded-tf border border-accent/40 bg-accent-soft p-3">
-                        <div>
-                            <label class="text-[12px] font-medium text-ink-2">Destination IP / Host Name</label>
-                            <div class="mt-1 flex gap-2">
-                                <input
-                                    type="text"
-                                    readonly
-                                    value="{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_HOST) }}"
-                                    class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[12px] text-ink"
-                                />
-                                <flux:button size="sm" variant="ghost" @click="copy('{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_HOST) }}', 'Host')">Copy</flux:button>
+                    {{-- Older firmware: HTTP Listening with real Basic auth fields.
+                         Kept collapsed so it doesn't distract from the common case. --}}
+                    <details class="rounded-tf border border-line bg-surface p-3">
+                        <summary class="cursor-pointer text-[12px] font-semibold text-ink-2">
+                            Only if your camera's page has User Name / Password fields (older HTTP Listening firmware)
+                        </summary>
+                        <div class="mt-3 space-y-3">
+                            <div>
+                                <label class="text-[12px] font-medium text-ink-2">URL (no secret in path)</label>
+                                <div class="mt-1 flex gap-2">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        value="{{ $this->setupCamera->webhookUrl() }}"
+                                        class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-ink"
+                                    />
+                                    <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrl() }}', 'URL')">Copy</flux:button>
+                                </div>
                             </div>
-                            <p class="mt-1 text-[11px] text-ink-muted">Hostname only — no <code>https://</code>, no path.</p>
-                        </div>
-                        <div>
-                            <label class="text-[12px] font-medium text-ink-2">URL (path portion)</label>
-                            <div class="mt-1 flex gap-2">
-                                <input
-                                    type="text"
-                                    readonly
-                                    value="{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_PATH) }}"
-                                    class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[12px] text-ink"
-                                />
-                                <flux:button size="sm" variant="ghost" @click="copy('{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_PATH) }}', 'Path')">Copy</flux:button>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-[12px] font-medium text-ink-2">User Name</label>
+                                    <div class="mt-1 flex gap-2">
+                                        <input
+                                            type="text"
+                                            readonly
+                                            value="{{ $this->setupCamera->id }}"
+                                            class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-ink"
+                                        />
+                                        <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->id }}', 'Username')">Copy</flux:button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-[12px] font-medium text-ink-2">Password</label>
+                                    <div class="mt-1 flex gap-2">
+                                        <input
+                                            :type="show ? 'text' : 'password'"
+                                            readonly
+                                            value="{{ $revealedSecret }}"
+                                            class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12px] text-ink"
+                                        />
+                                        <flux:button size="sm" variant="ghost" @click="show = ! show" x-text="show ? 'Hide' : 'Show'">Show</flux:button>
+                                        <flux:button size="sm" variant="ghost" @click="copy('{{ $revealedSecret }}', 'Secret')">Copy</flux:button>
+                                    </div>
+                                </div>
                             </div>
-                            <p class="mt-1 text-[11px] text-ink-muted">Starts with <code>/</code>, includes the secret.</p>
                         </div>
-                        <div class="col-span-2 flex gap-4 border-t border-line pt-2 text-[12px] text-ink-2">
-                            <span><span class="font-medium text-ink">Protocol:</span> <code>HTTPS</code> (fallback <code>HTTP</code>)</span>
-                            <span><span class="font-medium text-ink">Port:</span> <code>443</code> for HTTPS, <code>80</code> for HTTP</span>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL (auth-header variant)</label>
-                        <div class="mt-1 flex gap-2">
-                            <input
-                                type="text"
-                                readonly
-                                value="{{ $this->setupCamera->webhookUrl() }}"
-                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
-                            />
-                            <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrl() }}', 'URL')">Copy</flux:button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label class="text-[13px] font-medium text-ink-2">HTTP Basic username</label>
-                        <div class="mt-1 flex gap-2">
-                            <input
-                                type="text"
-                                readonly
-                                value="{{ $this->setupCamera->id }}"
-                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
-                            />
-                            <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->id }}', 'Username')">Copy</flux:button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label class="text-[13px] font-medium text-ink-2">HTTP Basic password (secret)</label>
-                        <div class="mt-1 flex gap-2">
-                            <input
-                                :type="show ? 'text' : 'password'"
-                                readonly
-                                value="{{ $revealedSecret }}"
-                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
-                            />
-                            <flux:button size="sm" variant="ghost" @click="show = ! show" x-text="show ? 'Hide' : 'Show'">Show</flux:button>
-                            <flux:button size="sm" variant="ghost" @click="copy('{{ $revealedSecret }}', 'Secret')">Copy</flux:button>
-                        </div>
-                    </div>
+                    </details>
                 </div>
 
                 <div class="rounded-tf border border-line bg-surface-2 p-4 text-[13px]">
@@ -555,31 +600,35 @@ new #[Title('Cameras')] class extends Component {
                         <li>
                             Open the destination-server page. It has moved across firmwares:
                             <ul class="ml-4 mt-1 list-disc space-y-0.5">
-                                <li><span class="font-medium text-ink">Event → Basic Event → Alarm Server</span> <em class="not-italic text-ink-muted">(newer firmware, no auth fields — use the first URL above)</em></li>
+                                <li><span class="font-medium text-ink">Event → Basic Event → Alarm Server</span> <em class="not-italic text-ink-muted">(most common on newer firmware)</em></li>
                                 <li><span class="font-medium text-ink">Network → Network Service → HTTP Listening</span></li>
-                                <li><span class="font-medium text-ink">Network → Advanced Settings → HTTP Listening</span> <em class="not-italic text-ink-muted">(older firmware, has auth fields — use the second URL + username/password)</em></li>
+                                <li><span class="font-medium text-ink">Network → Advanced Settings → HTTP Listening</span> <em class="not-italic text-ink-muted">(older firmware, has User/Password fields)</em></li>
                             </ul>
                             <em class="not-italic block pt-1 text-ink-muted">
                                 <strong>Do not</strong> use <span class="font-medium">Network → Platform Access → Hik-Connect</span> —
-                                that's Hikvision's consumer cloud, nothing to do with this webhook.
+                                that's Hikvision's consumer cloud, unrelated to this webhook.
                             </em>
                         </li>
                         <li>
-                            Click <span class="font-medium text-ink">Add</span> and fill it in:
+                            Click <span class="font-medium text-ink">Add</span> and copy the four values from the panel above:
                             <ul class="ml-4 mt-1 list-disc space-y-0.5">
-                                <li><span class="font-medium text-ink">Destination IP or Host Name:</span> <code>centrevision.co.za</code></li>
-                                <li><span class="font-medium text-ink">URL:</span> the path portion of the URL you copied above.</li>
-                                <li><span class="font-medium text-ink">Protocol Type:</span> <code>HTTP</code> — the reverse proxy handles TLS.</li>
-                                <li><span class="font-medium text-ink">Port No.:</span> <code>443</code>.</li>
-                                <li>Leave ANR on — the camera will buffer and retry events on network drops.</li>
-                                <li>If the page has User Name / Password fields, paste the camera id and secret from above.</li>
+                                <li><span class="font-medium text-ink">Destination IP or Host Name:</span> <code>{{ $webhookHost }}</code></li>
+                                <li><span class="font-medium text-ink">URL:</span> <code>{{ $webhookPath }}</code></li>
+                                <li><span class="font-medium text-ink">Protocol Type:</span> <code>{{ strtoupper($webhookScheme) }}</code></li>
+                                <li><span class="font-medium text-ink">Port No.:</span> <code>{{ $webhookPort }}</code></li>
                             </ul>
+                            <em class="not-italic block pt-1 text-ink-muted">
+                                If (and only if) the page also shows <span class="font-medium">User Name / Password</span> fields, open the "older firmware" panel above for those values.
+                            </em>
+                        </li>
+                        <li>
+                            Turn <span class="font-medium text-ink">ANR</span> <strong>off</strong> if the camera has no SD card, otherwise events go into an offline buffer that never plays back.
                         </li>
                         <li>
                             <span class="font-medium text-ink">Event → Smart Event → Road Traffic → Vehicle Detection</span>:
                             open the <span class="font-medium text-ink">Linkage Method</span> tab and tick
-                            <span class="font-medium text-ink">Notify Surveillance Center</span> (some firmware calls
-                            this row <span class="font-medium text-ink">HTTP Listening</span>) for every detection rule.
+                            <span class="font-medium text-ink">Notify Surveillance Center</span> (some firmware labels this row
+                            <span class="font-medium text-ink">HTTP Listening</span>) for every detection rule.
                         </li>
                         <li>Save. Drive a plate past and watch the "Last event" column on this page tick over.</li>
                     </ol>

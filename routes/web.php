@@ -38,6 +38,11 @@ Route::post('webhooks/hik/{camera}/{token?}', HikvisionWebhookController::class)
 // Guests arrive here from an owner's invitation email and register their shop.
 Route::livewire('shop-invitations/{token}', 'pages::shop-invitation')->name('shop-invitations.show');
 
+// The equivalent onboarding link for a Security Operator invited by an owner.
+// Distinct from shop-invitations because the resulting user joins the owner's
+// organization (not a new shop) and lands on a totally different navigation.
+Route::livewire('security-invitations/{token}', 'pages::security-invitation')->name('security-invitations.show');
+
 Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
     // Reachable while a subscription is lapsed, so a tenant can pay their way
     // back in rather than being locked out of the only page that would help.

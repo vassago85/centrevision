@@ -2,11 +2,15 @@
 
 use App\Enums\OrganizationType;
 use App\Enums\SubscriptionStatus;
+use App\Enums\UserRole;
+use App\Mail\SecurityInvitationMail;
 use App\Mail\ShopInvitationMail;
 use App\Models\Organization;
+use App\Models\SecurityInvitation;
 use App\Models\ShopInvitation;
 use App\Models\ShopSubscription;
 use App\Models\Site;
+use App\Models\User;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Mail;
@@ -28,6 +32,15 @@ new #[Title('Sub-accounts')] class extends Component {
 
     /** Set when editing an existing shop's monthly fee. */
     public ?int $editingSubscriptionId = null;
+
+    // ── Security operator invitation state ──────────────────────────────
+    // Distinct property names keep the shop and operator invite forms from
+    // fighting over the same fields when both modals are on the page.
+    public bool $showInviteOperator = false;
+
+    public string $operatorName = '';
+
+    public string $operatorEmail = '';
 
     public function mount(): void
     {
@@ -258,6 +271,158 @@ new #[Title('Sub-accounts')] class extends Component {
             default => ['tone' => 'neutral', 'label' => 'No subscription'],
         };
     }
+
+    // ── Security operators ──────────────────────────────────────────────
+
+    /**
+     * Guards and other security-desk staff hired by this owner.
+     */
+    #[Computed]
+    public function operators(): Collection
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+
+        if ($orgId === null) {
+            return collect();
+        }
+
+        return User::query()
+            ->where('organization_id', $orgId)
+            ->where('role', UserRole::SecurityOperator)
+            ->orderBy('name')
+            ->get();
+    }
+
+    /**
+     * Invitations that have gone out but not yet been accepted or expired.
+     */
+    #[Computed]
+    public function operatorInvitations(): Collection
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+
+        if ($orgId === null) {
+            return collect();
+        }
+
+        return SecurityInvitation::query()
+            ->where('organization_id', $orgId)
+            ->whereNull('accepted_at')
+            ->orderByDesc('created_at')
+            ->get();
+    }
+
+    /**
+     * Monthly cost the owner will see on their next invoice for the
+     * operator seats they've already onboarded. Purely informational —
+     * BillingCalculator is still the source of truth at invoice time.
+     */
+    #[Computed]
+    public function operatorSeatCost(): float
+    {
+        return $this->operators->count()
+            * (float) config('trafficflow.security_operator_monthly_amount');
+    }
+
+    public function openInviteOperator(): void
+    {
+        $this->resetValidation();
+        $this->reset(['operatorName', 'operatorEmail']);
+        $this->showInviteOperator = true;
+    }
+
+    public function inviteOperator(): void
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+        abort_if($orgId === null, 403);
+
+        $validated = $this->validate([
+            'operatorName' => ['required', 'string', 'max:160'],
+            'operatorEmail' => [
+                'required', 'email', 'max:255',
+                // A live user with this address would collide on acceptance.
+                // Owners re-inviting a former operator have to delete the
+                // old user first, which is intentional: a stale login is a
+                // security hole, not a convenience.
+                Rule::unique('users', 'email'),
+                Rule::unique('security_invitations', 'email')
+                    ->where('organization_id', $orgId)
+                    ->whereNull('accepted_at'),
+            ],
+        ]);
+
+        $invitation = SecurityInvitation::create([
+            'organization_id' => $orgId,
+            'name' => $validated['operatorName'],
+            'email' => $validated['operatorEmail'],
+            'token' => SecurityInvitation::generateToken(),
+            'expires_at' => now()->addDays((int) config('trafficflow.security_operator_invite_expires_days')),
+        ]);
+
+        Mail::to($invitation->email)->send(new SecurityInvitationMail($invitation));
+
+        $this->reset(['operatorName', 'operatorEmail', 'showInviteOperator']);
+        unset($this->operatorInvitations);
+
+        Flux::toast(
+            variant: 'success',
+            text: 'Invitation sent. They have '.config('trafficflow.security_operator_invite_expires_days').' days to accept.',
+        );
+    }
+
+    public function revokeOperatorInvitation(int $invitationId): void
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+
+        $invitation = SecurityInvitation::query()
+            ->where('organization_id', $orgId)
+            ->findOrFail($invitationId);
+
+        $invitation->delete();
+
+        unset($this->operatorInvitations);
+
+        Flux::toast(variant: 'success', text: 'Invitation revoked.');
+    }
+
+    public function resendOperatorInvitation(int $invitationId): void
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+
+        $invitation = SecurityInvitation::query()
+            ->where('organization_id', $orgId)
+            ->findOrFail($invitationId);
+
+        $invitation->update([
+            'expires_at' => now()->addDays((int) config('trafficflow.security_operator_invite_expires_days')),
+        ]);
+
+        Mail::to($invitation->email)->send(new SecurityInvitationMail($invitation));
+
+        unset($this->operatorInvitations);
+
+        Flux::toast(variant: 'success', text: 'Invitation resent.');
+    }
+
+    /**
+     * Remove a security operator seat. The user is deleted outright so their
+     * login stops working and the seat drops off the next invoice.
+     */
+    public function removeOperator(int $userId): void
+    {
+        $orgId = app(Tenancy::class)->organization()?->getKey();
+
+        $user = User::query()
+            ->where('organization_id', $orgId)
+            ->where('role', UserRole::SecurityOperator)
+            ->findOrFail($userId);
+
+        $user->delete();
+
+        unset($this->operators);
+
+        Flux::toast(variant: 'success', text: 'Operator removed.');
+    }
 }; ?>
 
 <div>
@@ -400,6 +565,102 @@ new #[Title('Sub-accounts')] class extends Component {
             @endforeach
         </x-data-table>
     </x-panel>
+
+    {{-- ── Security operators ────────────────────────────────────────────
+         Guards the owner hires to watch plates day-to-day. Sits inside the
+         same organization (so it inherits the site list) but has a slim
+         permission set that keeps it away from billing and site config. --}}
+    <div class="mt-8 mb-3 flex items-end justify-between gap-3">
+        <div>
+            <h2 class="text-[15px] font-semibold text-ink">Security operators</h2>
+            <p class="mt-0.5 text-[13px] text-ink-2">
+                Guards or on-site staff who watch every site you run.
+                @php $operatorRate = number_format((float) config('trafficflow.security_operator_monthly_amount'), 2); @endphp
+                R{{ $operatorRate }} per seat per month, added to your platform bill.
+            </p>
+        </div>
+        <flux:button size="sm" variant="primary" wire:click="openInviteOperator">Invite operator</flux:button>
+    </div>
+
+    <x-panel heading="Active operators">
+        <x-data-table
+            :headers="['Name', 'Email', 'Joined', ['label' => '', 'align' => 'right']]"
+            :is-empty="$this->operators->isEmpty()"
+            empty="No operators yet. Invite your first to have someone watching plates in real time."
+        >
+            @foreach ($this->operators as $operator)
+                <tr wire:key="operator-{{ $operator->id }}">
+                    <td class="border-b border-line py-2 font-medium">{{ $operator->name }}</td>
+                    <td class="border-b border-line py-2 text-ink-2">{{ $operator->email }}</td>
+                    <td class="border-b border-line py-2 text-ink-2">{{ $operator->created_at->format('j M Y') }}</td>
+                    <td class="border-b border-line py-2 text-right">
+                        <flux:button
+                            size="xs"
+                            variant="ghost"
+                            wire:click="removeOperator({{ $operator->id }})"
+                            wire:confirm="Remove {{ $operator->name }}? Their login will stop working immediately."
+                        >Remove</flux:button>
+                    </td>
+                </tr>
+            @endforeach
+        </x-data-table>
+        @if ($this->operators->isNotEmpty())
+            {{-- Rough forecast so the owner isn't surprised when the seats
+                 show up on the next invoice. --}}
+            <p class="mt-3 text-right text-[12.5px] text-ink-muted">
+                {{ $this->operators->count() }} seat{{ $this->operators->count() === 1 ? '' : 's' }}
+                × R{{ number_format((float) config('trafficflow.security_operator_monthly_amount'), 2) }}
+                = <span class="font-semibold text-ink">R{{ number_format($this->operatorSeatCost, 2) }}/month</span>
+            </p>
+        @endif
+    </x-panel>
+
+    <x-panel heading="Pending operator invitations">
+        <x-data-table
+            :headers="['Name', 'Email', 'Expires', ['label' => '', 'align' => 'right']]"
+            :is-empty="$this->operatorInvitations->isEmpty()"
+            empty="No operator invitations outstanding."
+        >
+            @foreach ($this->operatorInvitations as $invitation)
+                <tr wire:key="operator-invite-{{ $invitation->id }}">
+                    <td class="border-b border-line py-2 font-medium">{{ $invitation->name }}</td>
+                    <td class="border-b border-line py-2 text-ink-2">{{ $invitation->email }}</td>
+                    <td class="border-b border-line py-2">
+                        @if ($invitation->hasExpired())
+                            <x-badge tone="danger">Expired</x-badge>
+                        @else
+                            <span class="text-ink-2">{{ $invitation->expires_at->diffForHumans() }}</span>
+                        @endif
+                    </td>
+                    <td class="border-b border-line py-2 text-right">
+                        <div class="flex justify-end gap-1">
+                            <flux:button size="xs" variant="ghost" wire:click="resendOperatorInvitation({{ $invitation->id }})">Resend</flux:button>
+                            <flux:button size="xs" variant="ghost" wire:click="revokeOperatorInvitation({{ $invitation->id }})">Revoke</flux:button>
+                        </div>
+                    </td>
+                </tr>
+            @endforeach
+        </x-data-table>
+    </x-panel>
+
+    <flux:modal wire:model.self="showInviteOperator" class="md:w-[28rem]">
+        <form wire:submit="inviteOperator" class="space-y-5">
+            <flux:heading size="lg">Invite a security operator</flux:heading>
+
+            <flux:input wire:model="operatorName" label="Full name" placeholder="Jane Radebe" />
+            <flux:input wire:model="operatorEmail" type="email" label="Email address" />
+
+            <p class="text-[13px] text-ink-2">
+                They will get an email with a link that lets them set their own password. They will see
+                every site you run, plus cameras, security and the watchlist — no billing or shop tools.
+            </p>
+
+            <div class="flex justify-end gap-2">
+                <flux:button variant="ghost" type="button" wire:click="$set('showInviteOperator', false)">Cancel</flux:button>
+                <flux:button variant="primary" type="submit">Send invitation</flux:button>
+            </div>
+        </form>
+    </flux:modal>
 
     <flux:modal wire:model.self="showInvite" class="md:w-[28rem]">
         <form wire:submit="invite" class="space-y-5">

@@ -129,6 +129,13 @@ return [
 
     'shop_invitation_expires_days' => 14,
 
+    // Flat monthly rate for a Security Operator seat. Same rate as a shop
+    // sub-user by default because both consume a login and a seat on the
+    // owner's invoice, and the operator's job is not less valuable than
+    // that of a shop admin.
+    'security_operator_monthly_amount' => (float) env('TRAFFICFLOW_SECURITY_OPERATOR_MONTHLY_AMOUNT', 20.00),
+    'security_operator_invite_expires_days' => 14,
+
     /*
     |--------------------------------------------------------------------------
     | Support

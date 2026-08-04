@@ -77,6 +77,8 @@ Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
         Route::livewire('/', 'pages::platform.overview')->name('overview');
         Route::livewire('owners', 'pages::platform.owners')->name('owners');
         Route::livewire('partners', 'pages::platform.partners')->name('partners');
+        Route::livewire('approvals', 'pages::platform.approvals')->name('approvals');
+        Route::livewire('settings', 'pages::platform.settings')->name('settings');
     });
 });
 

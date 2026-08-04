@@ -96,6 +96,8 @@ class Navigation
             ['label' => 'Platform', 'route' => 'platform.overview', 'icon' => 'globe-alt'],
             ['label' => 'Owners', 'route' => 'platform.owners', 'icon' => 'building-office-2'],
             ['label' => 'Partners', 'route' => 'platform.partners', 'icon' => 'hand-raised'],
+            ['label' => 'Approvals', 'route' => 'platform.approvals', 'icon' => 'clipboard-document-check'],
+            ['label' => 'Settings', 'route' => 'platform.settings', 'icon' => 'cog-6-tooth'],
         ];
     }
 }

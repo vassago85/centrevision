@@ -9,10 +9,11 @@
     $demoMode = (bool) config('trafficflow.demo_mode');
 
     $accounts = [
-        ['Owner admin',   'owner@centrevision.co.za',    'Full centre owner: all sites, cameras, security, billing.'],
-        ['Shop admin',    'shop@centrevision.co.za',     'Sub-account: aggregate view of the site their shop trades in.'],
-        ['Shop viewer',   'viewer@centrevision.co.za',   'Read-only shop user.'],
-        ['Platform',      'platform@centrevision.co.za', 'CentreVision staff: cross-tenant view, partners, payouts.'],
+        ['Owner admin',       'owner@centrevision.co.za',    'Full centre owner: all sites, cameras, security, billing.'],
+        ['Security operator', 'security@centrevision.co.za', 'A guard hired by the owner: plate-level data, watchlist and read-only cameras — no billing.'],
+        ['Shop admin',        'shop@centrevision.co.za',     'Sub-account: aggregate view of the site their shop trades in.'],
+        ['Shop viewer',       'viewer@centrevision.co.za',   'Read-only shop user.'],
+        ['Platform',          'platform@centrevision.co.za', 'CentreVision staff: cross-tenant view, partners, payouts.'],
     ];
 
     $password = \Database\Seeders\DemoDataSeeder::PASSWORD;

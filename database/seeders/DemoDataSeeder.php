@@ -163,6 +163,17 @@ class DemoDataSeeder extends Seeder
             'organization_id' => $owner->id,
             'role' => UserRole::OwnerAdmin,
         ]);
+
+        // A hired guard for the owner, seeded so the security-operator flow
+        // shows up alongside the other roles on the demo login card.
+        User::create([
+            'name' => 'Jane Radebe',
+            'email' => 'security@centrevision.co.za',
+            'password' => Hash::make(self::PASSWORD),
+            'email_verified_at' => now(),
+            'organization_id' => $owner->id,
+            'role' => UserRole::SecurityOperator,
+        ]);
     }
 
     protected function createSubscriptions(Site $junction, Site $corner): void

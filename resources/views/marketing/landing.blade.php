@@ -130,7 +130,7 @@
                     @foreach ([
                         ['Traffic',      'How busy is my centre?',       'chart-bar',            'Total visits and unique vehicles, dwell distribution, peak hours and busiest days, entrance-by-entrance share. Staff and delivery plates auto-detected and filtered out of the shopper view.'],
                         ['Security',     'Who is on-site right now?',    'shield-exclamation',   'Live dwell alerts for vehicles above your threshold, odd-hour recurring plates, multi-entry patterns, and watchlist matches. Nothing waits for a nightly rollup.'],
-                        ['Sub-accounts', 'What can I offer my tenants?', 'user-group',           'Every shop in your centre gets its own aggregate dashboard — real footfall data for the mall they trade in, to roster and stock and market against. An extra reason to renew. Plate numbers never leave the security view.'],
+                        ['Sub-accounts', 'Who else needs a login?',      'user-group',           'Shops get their own aggregate dashboard as an extra reason to renew — plate numbers never leave the security view. Security operators get plate-level and watchlist tools without seeing your billing. Both bill per seat on the same invoice as everything else.'],
                     ] as [$tag, $question, $icon, $body])
                         <article class="flex flex-col gap-5 rounded-2xl border border-line bg-surface p-7 shadow-tf-sm transition-shadow hover:shadow-tf-md">
                             <span class="flex size-12 items-center justify-center rounded-xl bg-accent-soft text-accent">
@@ -293,7 +293,7 @@
                     @foreach ([
                         ['Point a camera',        'video-camera',        'Add each ANPR-enabled camera by IP and role (entrance or exit). We handle Hikvision alert streams and FTP drops out of the box.'],
                         ['Watch it fill up',      'chart-bar-square',    'Plate events start flowing within seconds. Visits pair up automatically. Staff and tenant plates get flagged after a week.'],
-                        ['Invite your tenants',   'user-plus',           'Each shop gets their own login to the centre-wide aggregate view. You bill them directly through the platform.'],
+                        ['Invite your team',      'user-plus',           'Shops get their own aggregate dashboard as an extra reason to renew. Security operators get plate-level and watchlist tools without seeing your billing. Everyone lands on the same invoice.'],
                     ] as $i => [$title, $icon, $body])
                         <li class="flex flex-col gap-4 rounded-2xl border border-line bg-page p-7 shadow-tf-sm">
                             <div class="flex items-center gap-3">

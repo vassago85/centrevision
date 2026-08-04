@@ -53,6 +53,10 @@ new #[Title('Watchlist')] class extends Component
     {
         $data = $this->validate();
 
+        $site = app(Tenancy::class)->sites()->firstWhere('id', $data['siteId']);
+        abort_if($site === null, 403);
+        $this->authorize('manageWatchlist', $site);
+
         WatchlistPlate::updateOrCreate(
             ['site_id' => $data['siteId'], 'plate_number' => PlateNumber::normalise($data['plateNumber'])],
             [
@@ -74,7 +78,7 @@ new #[Title('Watchlist')] class extends Component
     {
         $entry = WatchlistPlate::query()->findOrFail($id);
 
-        $this->authorize('viewSecurity', $entry->site);
+        $this->authorize('manageWatchlist', $entry->site);
 
         $this->editingId = $entry->id;
         $this->siteId = $entry->site_id;
@@ -89,7 +93,7 @@ new #[Title('Watchlist')] class extends Component
     {
         $entry = WatchlistPlate::query()->findOrFail($id);
 
-        $this->authorize('viewSecurity', $entry->site);
+        $this->authorize('manageWatchlist', $entry->site);
         $entry->delete();
 
         unset($this->entries);

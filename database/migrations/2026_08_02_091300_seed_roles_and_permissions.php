@@ -56,6 +56,13 @@ return new class extends Migration
         }
 
         foreach (UserRole::cases() as $role) {
+            // Roles added by later migrations are not seeded here — their own
+            // migration owns their permission set. Skipping keeps this seed
+            // migration stable as the role catalogue grows over time.
+            if (! array_key_exists($role->value, self::ROLE_PERMISSIONS)) {
+                continue;
+            }
+
             $model = Role::findOrCreate($role->value, 'web');
 
             $permissions = self::ROLE_PERMISSIONS[$role->value];

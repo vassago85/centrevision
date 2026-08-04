@@ -48,6 +48,19 @@ class UserFactory extends Factory
         ]);
     }
 
+    /**
+     * A guard or other on-the-ground security staffer hired by an owner.
+     * Shares the owner's organization so the site scope carries across
+     * automatically.
+     */
+    public function securityOperator(?Organization $organization = null): static
+    {
+        return $this->state(fn () => [
+            'role' => UserRole::SecurityOperator,
+            'organization_id' => $organization?->getKey() ?? Organization::factory()->owner(),
+        ]);
+    }
+
     public function shopAdmin(?Organization $organization = null): static
     {
         return $this->state(fn () => [

@@ -115,6 +115,16 @@ class User extends Authenticatable implements PasskeyUser
         return $this->role === UserRole::OwnerAdmin;
     }
 
+    /**
+     * A guard or other security-desk staffer hired by the owner. Lives in
+     * the owner's organization and inherits its site list, but has limited
+     * permissions — plate-level data and watchlist only.
+     */
+    public function isSecurityOperator(): bool
+    {
+        return $this->role === UserRole::SecurityOperator;
+    }
+
     public function isShopUser(): bool
     {
         return $this->role->isShopRole();

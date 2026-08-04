@@ -98,7 +98,7 @@ new #[Title('Security')] class extends Component {
         $site = app(Tenancy::class)->sites()->firstWhere('id', $siteId);
 
         abort_if($site === null, 403);
-        $this->authorize('viewSecurity', $site);
+        $this->authorize('manageWatchlist', $site);
 
         WatchlistPlate::updateOrCreate(
             ['site_id' => $site->getKey(), 'plate_number' => $plateNumber],

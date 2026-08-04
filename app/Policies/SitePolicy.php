@@ -76,4 +76,14 @@ class SitePolicy
     {
         return $user->can('view security alerts') && $this->view($user, $site);
     }
+
+    /**
+     * Add / remove watchlist plates. Split from viewSecurity so a Security
+     * Operator can curate the list without also being handed every other
+     * owner-level ability.
+     */
+    public function manageWatchlist(User $user, Site $site): bool
+    {
+        return $user->can('manage watchlist') && $this->view($user, $site);
+    }
 }

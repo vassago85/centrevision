@@ -77,3 +77,23 @@ it('lets the owner remove an entry', function () {
 
     expect(WatchlistPlate::count())->toBe(0);
 });
+
+it('lets a security operator hired by the owner add and remove plates', function () {
+    // A guard employed by the owner shares the owner's organization so the
+    // tenant scope carries them onto the same sites automatically.
+    $operator = User::factory()->securityOperator($this->owner)->create();
+    actingAsTenant($operator);
+
+    Livewire::test('pages::watchlist')
+        ->set('siteId', $this->site->id)
+        ->set('plateNumber', 'SEC91GP')
+        ->set('kind', WatchlistKind::Watch->value)
+        ->set('reason', 'Loitering yesterday')
+        ->call('save');
+
+    $entry = WatchlistPlate::sole();
+    expect($entry->plate_number)->toBe('SEC91GP');
+
+    Livewire::test('pages::watchlist')->call('remove', $entry->id);
+    expect(WatchlistPlate::count())->toBe(0);
+});

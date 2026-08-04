@@ -162,7 +162,16 @@ it('counts repeat entries today above the configured threshold', function () {
     $rows = $this->security->multipleEntriesToday();
 
     expect($rows->pluck('plate_number')->all())->toBe(['JD45GP'])
-        ->and($rows->first()['entries'])->toBe(3);
+        ->and($rows->first()['entries'])->toBe(3)
+        // Times are returned in chronological order so the security team can
+        // see every visit, not just the most recent one.
+        ->and($rows->first()['times'])->toHaveCount(3)
+        ->and($rows->first()['times'])->toBe([
+            Date::now()->subHours(5)->format('H:i'),
+            Date::now()->subHours(3)->format('H:i'),
+            Date::now()->subHour()->format('H:i'),
+        ])
+        ->and($rows->first()['last_seen'])->toBe(Date::now()->subHour()->format('H:i'));
 })->skip(fn () => Date::now()->hour < 6, 'Needs at least six hours elapsed today.');
 
 it('counts recent visits that never recorded an exit', function () {

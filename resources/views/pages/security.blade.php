@@ -3,6 +3,7 @@
 use App\Enums\WatchlistKind;
 use App\Models\WatchlistPlate;
 use App\Support\Analytics\SecurityAnalytics;
+use App\Support\Analytics\SecurityLogExporter;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
@@ -90,11 +91,37 @@ new #[Title('Security')] class extends Component {
     {
         return intdiv($minutes, 60).'h '.str_pad((string) ($minutes % 60), 2, '0', STR_PAD_LEFT).'m';
     }
+
+    /**
+     * Stream every plate detection for the day as CSV. Only the site owner
+     * ever reaches this action (route middleware + policy), so the plate
+     * numbers this export contains stay inside the trust boundary POPIA
+     * defines for their site.
+     */
+    public function downloadTodayLog()
+    {
+        $tenancy = app(Tenancy::class);
+        $site = $tenancy->currentSite();
+
+        abort_if($site === null, 400, 'Choose a site before exporting a log.');
+
+        $this->authorize('viewSecurity', $site);
+
+        return app(SecurityLogExporter::class)->streamDay($site, now());
+    }
 }; ?>
 
 <div wire:poll.60s>
     <x-page-header title="Security · dwell alerts" :subtitle="(app(App\Support\Tenancy::class)->currentSite()?->name ?? 'All sites').' · live'">
         <x-slot:actions>
+            @if (app(App\Support\Tenancy::class)->currentSite() !== null)
+                <flux:button
+                    size="sm"
+                    variant="ghost"
+                    icon="arrow-down-tray"
+                    wire:click="downloadTodayLog"
+                >Download today's log</flux:button>
+            @endif
             <flux:select wire:model.live="thresholdHours" size="sm" class="min-w-36" label="Threshold" label:sr-only>
                 @foreach ($this->thresholdOptions() as $hours)
                     <flux:select.option :value="$hours">{{ $hours }} hours</flux:select.option>
@@ -175,15 +202,15 @@ new #[Title('Security')] class extends Component {
 
         <x-panel heading="Multiple entries today">
             <x-data-table
-                :headers="['Plate', 'Last seen', ['label' => 'Entries', 'align' => 'right']]"
+                :headers="['Plate', 'Entry times', ['label' => 'Entries', 'align' => 'right']]"
                 :is-empty="$this->multiEntry->isEmpty()"
                 empty="No plate has re-entered enough times today to flag."
             >
                 @foreach ($this->multiEntry as $row)
                     <tr wire:key="multi-{{ $row['plate_number'] }}">
-                        <td class="border-b border-line py-2"><x-plate :number="$row['plate_number']" /></td>
-                        <td class="border-b border-line py-2 text-ink-2">{{ $row['last_seen'] }}</td>
-                        <td class="border-b border-line py-2 text-right tabular-nums">{{ $row['entries'] }}</td>
+                        <td class="border-b border-line py-2 align-top"><x-plate :number="$row['plate_number']" /></td>
+                        <td class="border-b border-line py-2 text-ink-2 tabular-nums">{{ implode(', ', $row['times']) }}</td>
+                        <td class="border-b border-line py-2 text-right tabular-nums align-top">{{ $row['entries'] }}</td>
                     </tr>
                 @endforeach
             </x-data-table>

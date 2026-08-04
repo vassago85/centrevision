@@ -84,29 +84,51 @@ class SecurityAnalytics
      * Plates that entered repeatedly today. Deliveries look like this, and so
      * does someone circling a parking lot.
      *
-     * @return Collection<int, array{plate_number: string, entries: int, last_seen: string}>
+     * @return Collection<int, array{plate_number: string, entries: int, last_seen: string, times: array<int, string>}>
      */
     public function multipleEntriesToday(): Collection
     {
         $threshold = (int) config('trafficflow.security.multi_entry_threshold');
+        $dayStart = Date::now()->startOfDay();
 
-        return PlateEvent::query()
+        $counts = PlateEvent::query()
             ->where('direction', PlateDirection::In)
-            ->where('captured_at', '>=', Date::now()->startOfDay())
-            ->selectRaw('plate_number, count(*) as entries, max(captured_at) as last_seen')
+            ->where('captured_at', '>=', $dayStart)
+            ->selectRaw('plate_number, count(*) as entries')
             ->groupBy('plate_number')
             ->havingRaw('count(*) >= ?', [$threshold])
             ->orderByRaw('count(*) desc')
             ->limit(20)
-            // These rows are aggregates, not plate events, so they stay as
-            // plain rows rather than being hydrated into models.
             ->toBase()
-            ->get()
-            ->map(fn (object $row) => [
-                'plate_number' => (string) $row->plate_number,
+            ->get();
+
+        if ($counts->isEmpty()) {
+            return new Collection;
+        }
+
+        // Second query fetches every capture time for the flagged plates so we
+        // can show the security team when each entry actually happened, rather
+        // than only the last one.
+        $times = PlateEvent::query()
+            ->where('direction', PlateDirection::In)
+            ->where('captured_at', '>=', $dayStart)
+            ->whereIn('plate_number', $counts->pluck('plate_number')->all())
+            ->orderBy('captured_at')
+            ->get(['plate_number', 'captured_at'])
+            ->groupBy('plate_number');
+
+        return $counts->map(function (object $row) use ($times) {
+            $plate = (string) $row->plate_number;
+            $plateTimes = $times->get($plate, new Collection);
+            $formatted = $plateTimes->map(fn ($event) => $event->captured_at->format('H:i'))->values()->all();
+
+            return [
+                'plate_number' => $plate,
                 'entries' => (int) $row->entries,
-                'last_seen' => Date::parse($row->last_seen)->format('H:i'),
-            ]);
+                'last_seen' => $formatted !== [] ? end($formatted) : '',
+                'times' => $formatted,
+            ];
+        })->values();
     }
 
     /**

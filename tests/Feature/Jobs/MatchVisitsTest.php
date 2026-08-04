@@ -70,13 +70,31 @@ it('does not reopen a visit from an exit event replayed on a later run', functio
 it('treats a second entrance read as the same visit, not a new one', function () {
     $other = Camera::factory()->entrance()->create(['site_id' => $this->site->id]);
 
+    // Two cameras at the same entrance seeing the same drive-through 30
+    // seconds apart — should collapse into one visit.
     PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subMinutes(40))->create();
-    PlateEvent::factory()->for($other)->plateNumber('JD45GP')->entering(now()->subMinutes(39))->create();
+    PlateEvent::factory()->for($other)->plateNumber('JD45GP')->entering(now()->subMinutes(40)->addSeconds(30))->create();
 
     MatchVisits::dispatchSync();
 
     expect(Visit::query()->count())->toBe(1)
         ->and(Visit::query()->sole()->status)->toBe(VisitStatus::Open);
+});
+
+it('opens a new visit when a plate is re-detected long after entering', function () {
+    // Same plate seen entering twice, hours apart, with no exit in between —
+    // treat the second reading as a genuine re-arrival and orphan the earlier
+    // open visit so the latest entry is the one that shows in "Latest visits".
+    PlateEvent::factory()->for($this->entrance)->plateNumber('FF98ZTGP')->entering(now()->subHours(2))->create();
+    PlateEvent::factory()->for($this->entrance)->plateNumber('FF98ZTGP')->entering(now()->subMinutes(5))->create();
+
+    MatchVisits::dispatchSync();
+
+    $visits = Visit::query()->orderByDesc('entered_at')->get();
+
+    expect($visits)->toHaveCount(2)
+        ->and($visits[0]->status)->toBe(VisitStatus::Open)
+        ->and($visits[1]->status)->toBe(VisitStatus::Orphaned);
 });
 
 it('starts a fresh visit when the plate returns after leaving', function () {

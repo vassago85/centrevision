@@ -29,6 +29,14 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
 
     public int $uniqueFor = 600;
 
+    /**
+     * Two entrance reads of the same plate closer together than this are
+     * treated as one drive-through past multiple cameras (multi-camera
+     * de-duplication). Anything further apart is a genuine re-arrival and
+     * gets its own visit record.
+     */
+    protected const REENTRY_DEDUP_SECONDS = 120;
+
     public function __construct(public ?int $siteId = null) {}
 
     public function uniqueId(): string
@@ -90,15 +98,34 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * An entry for a plate that is already on site is a re-read at a second
-     * entrance camera, not a new visit.
+     * Turn an entry event into a visit.
+     *
+     * Two entrance reads seconds apart are the same drive-through past multiple
+     * cameras and collapse to one visit. A re-arrival minutes or hours later is
+     * its own visit: the previous open one is retired as `orphaned` (we never
+     * saw an exit for it, so we cannot honestly close it), and a fresh visit
+     * is opened so the latest arrival is always the top of the visits list.
      */
     protected function openVisit(Site $site, PlateEvent $event): void
     {
-        $alreadyOnSite = $this->openVisitQuery($site, $event->plate_number)->exists();
+        $existing = $this->openVisitQuery($site, $event->plate_number)
+            ->orderByDesc('entered_at')
+            ->first();
 
-        if ($alreadyOnSite) {
-            return;
+        if ($existing !== null) {
+            $secondsSincePreviousEntry = $existing->entered_at->diffInSeconds($event->captured_at);
+
+            if ($secondsSincePreviousEntry <= self::REENTRY_DEDUP_SECONDS) {
+                // Same drive-through, second camera — do not create a new visit.
+                return;
+            }
+
+            // A genuine re-arrival. Retire the previous open visit and create
+            // a new one for the latest entry.
+            $existing->forceFill([
+                'status' => VisitStatus::Orphaned,
+                'updated_at' => now(),
+            ])->save();
         }
 
         Visit::query()->withoutGlobalScope(SiteScope::class)->create([

@@ -113,6 +113,12 @@ services:
     entrypoint: []
     command: sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"
     environment:
+      # APP_NAME must match the `app` service. Laravel derives the Redis key
+      # prefix from Str::slug(APP_NAME).'-database-', so a missing APP_NAME
+      # here silently makes this container use `laravel-database-` while the
+      # app uses `centrevision-database-` — dispatched jobs land in one list
+      # and the worker reads a different one, and no error is ever raised.
+      - APP_NAME=${APP_NAME:-CentreVision}
       - APP_ENV=production
       - APP_TIMEZONE=Africa/Johannesburg
       - TZ=Africa/Johannesburg
@@ -160,6 +166,10 @@ services:
     entrypoint: []
     command: php /var/www/html/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
     environment:
+      # See the scheduler service — Laravel derives the Redis prefix from
+      # APP_NAME. Omit this and the worker reads a different queue list from
+      # the app container, silently missing every dispatched job.
+      - APP_NAME=${APP_NAME:-CentreVision}
       - APP_ENV=production
       - APP_TIMEZONE=Africa/Johannesburg
       - TZ=Africa/Johannesburg

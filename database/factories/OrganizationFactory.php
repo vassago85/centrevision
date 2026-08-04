@@ -24,6 +24,11 @@ class OrganizationFactory extends Factory
             'parent_site_id' => null,
             'referred_by_partner_id' => null,
             'settings' => null,
+            // Approved by default so 400-plus existing tests keep exercising
+            // "signed-in owner" flows without every one having to stamp the
+            // organization. Tests that specifically cover the approval flow
+            // pass `pendingApproval()` to opt out.
+            'approved_at' => now(),
         ];
     }
 
@@ -32,6 +37,19 @@ class OrganizationFactory extends Factory
         return $this->state(fn () => [
             'type' => OrganizationType::Owner,
             'parent_site_id' => null,
+        ]);
+    }
+
+    /**
+     * A brand-new owner sign-up that has not yet been reviewed. Used by
+     * approval-flow tests and by the DemoDataSeeder to keep a "you have
+     * pending sign-ups" row on the platform dashboard.
+     */
+    public function pendingApproval(): static
+    {
+        return $this->state(fn () => [
+            'approved_at' => null,
+            'approved_by_user_id' => null,
         ]);
     }
 

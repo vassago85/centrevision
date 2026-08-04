@@ -4,8 +4,11 @@ namespace App\Actions\Fortify;
 
 use App\Concerns\PasswordValidationRules;
 use App\Concerns\ProfileValidationRules;
+use App\Enums\ApprovalKind;
+use App\Enums\ApprovalStatus;
 use App\Enums\OrganizationType;
 use App\Enums\UserRole;
+use App\Models\Approval;
 use App\Models\Organization;
 use App\Models\Scopes\SiteScope;
 use App\Models\Site;
@@ -40,6 +43,10 @@ class CreateNewUser implements CreatesNewUsers
             $organization = Organization::create([
                 'name' => $input['organization_name'] ?? $input['name'],
                 'type' => OrganizationType::Owner,
+                // Left null: a platform admin has to approve the sign-up
+                // before this org can use the app. Existing tenants that
+                // predate this feature were stamped in the migration up.
+                'approved_at' => null,
             ]);
 
             Site::query()->withoutGlobalScope(SiteScope::class)->create([
@@ -47,13 +54,30 @@ class CreateNewUser implements CreatesNewUsers
                 'name' => 'My first site',
             ]);
 
-            return User::create([
+            $user = User::create([
                 'name' => $input['name'],
                 'email' => $input['email'],
                 'password' => $input['password'],
                 'organization_id' => $organization->getKey(),
                 'role' => UserRole::OwnerAdmin,
             ]);
+
+            // Queue the org for review. Payload carries what the platform
+            // admin needs to decide (name, email, company) without joining.
+            Approval::create([
+                'kind' => ApprovalKind::OwnerRegistration,
+                'status' => ApprovalStatus::Pending,
+                'subject_type' => Organization::class,
+                'subject_id' => $organization->getKey(),
+                'requested_by_user_id' => $user->getKey(),
+                'payload' => [
+                    'organization_name' => $organization->name,
+                    'user_name' => $user->name,
+                    'user_email' => $user->email,
+                ],
+            ]);
+
+            return $user;
         });
     }
 }

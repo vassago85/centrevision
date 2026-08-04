@@ -23,10 +23,15 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
  * @property int|null $parent_site_id
  * @property int|null $referred_by_partner_id
  * @property array<string, mixed>|null $settings
+ * @property CarbonInterface|null $approved_at
+ * @property int|null $approved_by_user_id
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
  */
-#[Fillable(['name', 'type', 'parent_site_id', 'referred_by_partner_id', 'settings'])]
+#[Fillable([
+    'name', 'type', 'parent_site_id', 'referred_by_partner_id',
+    'settings', 'approved_at', 'approved_by_user_id',
+])]
 class Organization extends Model
 {
     /** @use HasFactory<OrganizationFactory> */
@@ -45,6 +50,7 @@ class Organization extends Model
         return [
             'type' => OrganizationType::class,
             'settings' => 'array',
+            'approved_at' => 'datetime',
         ];
     }
 
@@ -56,6 +62,20 @@ class Organization extends Model
     public function isShop(): bool
     {
         return $this->type === OrganizationType::Shop;
+    }
+
+    /**
+     * True when the organization has been signed off by a platform admin.
+     * Shops inherit their owner's approval and so always answer true; only
+     * owner orgs are actually gated on this timestamp.
+     */
+    public function isApproved(): bool
+    {
+        if ($this->isShop()) {
+            return $this->parentSite?->organization?->isApproved() ?? true;
+        }
+
+        return $this->approved_at !== null;
     }
 
     /**

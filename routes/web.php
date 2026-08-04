@@ -44,6 +44,11 @@ Route::livewire('shop-invitations/{token}', 'pages::shop-invitation')->name('sho
 Route::livewire('security-invitations/{token}', 'pages::security-invitation')->name('security-invitations.show');
 
 Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
+    // New owner sign-ups land here until a platform admin approves them.
+    // Registered before other tenant routes so EnsureTenantContext's
+    // "route it here" branch has somewhere to route them to.
+    Route::livewire('registration-pending', 'pages::registration-pending')->name('registration.pending');
+
     // Reachable while a subscription is lapsed, so a tenant can pay their way
     // back in rather than being locked out of the only page that would help.
     Route::livewire('paywall', 'pages::paywall')->name('paywall');

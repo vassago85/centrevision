@@ -38,6 +38,26 @@ class EnsureTenantContext
         // silently ignored on every subsequent request.
         $request->session()->put(self::SESSION_KEY, $this->tenancy->currentSiteId());
 
+        // Owners (and their operators / shops) whose organization has not
+        // yet been approved by a platform admin see a holding page rather
+        // than the app. Platform admins are exempt so they can actually
+        // do the approving.
+        if (
+            ! $user->isPlatformAdmin()
+            && $user->organization !== null
+            && ! $user->organization->isApproved()
+        ) {
+            // On the waiting page already: let it render. Skipping the
+            // "no sites" branch below is intentional — a pending owner
+            // always has zero sites showing (they can't reach Sites yet)
+            // and we do not want to bounce them there.
+            if ($request->routeIs('registration.pending')) {
+                return $next($request);
+            }
+
+            return redirect()->route('registration.pending');
+        }
+
         // A tenant user with no site of their own is either a brand new owner
         // signing up (who must be allowed onto the Sites page to add their
         // first property) or a shop whose invitation was never linked (who

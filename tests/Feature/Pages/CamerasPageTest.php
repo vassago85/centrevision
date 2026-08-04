@@ -183,3 +183,42 @@ it('will not let one owner regenerate another owner camera secret', function () 
 
     Livewire::test('pages::cameras')->call('regenerateSecret', $foreign->id);
 })->throws(ModelNotFoundException::class);
+
+it('shows the cameras page in read-only mode for a security operator', function () {
+    Camera::factory()->for($this->site)->create(['name' => 'North entrance']);
+
+    $operator = User::factory()->securityOperator($this->owner)->create();
+    actingAsTenant($operator);
+
+    Livewire::test('pages::cameras')
+        ->assertSee('North entrance')
+        // The banner is the visual cue that the tab is not a config screen.
+        ->assertSee('read-only mode')
+        // The button that would let them add a camera is intentionally gone.
+        // The hidden "Add camera" modal heading is still in the DOM so we
+        // match on the button's wire:click handler for an unambiguous check.
+        ->assertDontSeeHtml('wire:click="add"')
+        ->assertDontSeeHtml('wire:click="edit')
+        ->assertDontSeeHtml('wire:click="delete')
+        ->assertSet('canManageCameras', false);
+});
+
+it('rejects a security operator that tries to call the add action directly', function () {
+    $operator = User::factory()->securityOperator($this->owner)->create();
+    actingAsTenant($operator);
+
+    // Even if a hostile client bypasses the UI, the server refuses the
+    // mutation. The bell-icon in the browser is defence in depth, not the
+    // security boundary itself.
+    Livewire::test('pages::cameras')->call('add')->assertStatus(403);
+});
+
+it('rejects a security operator that tries to edit or delete a camera directly', function () {
+    $camera = Camera::factory()->for($this->site)->create();
+
+    $operator = User::factory()->securityOperator($this->owner)->create();
+    actingAsTenant($operator);
+
+    Livewire::test('pages::cameras')->call('edit', $camera->id)->assertStatus(403);
+    Livewire::test('pages::cameras')->call('delete', $camera->id)->assertStatus(403);
+});

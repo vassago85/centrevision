@@ -93,8 +93,24 @@ new #[Title('Cameras')] class extends Component {
         return app(Tenancy::class)->sites();
     }
 
+    /**
+     * Owners and platform admins configure cameras. Security operators land
+     * on this page as well but only to check that the devices are alive; the
+     * add / edit / delete / regenerate-secret controls are hidden for them.
+     */
+    #[Computed]
+    public function canManageCameras(): bool
+    {
+        return auth()->user()?->can('manage cameras') ?? false;
+    }
+
     public function add(): void
     {
+        // Guard the server side too — hiding a button in the view isn't
+        // enough on its own, because Livewire actions can still be invoked
+        // by anyone who knows their names.
+        abort_unless($this->canManageCameras, 403);
+
         $this->reset(['editingId', 'name', 'ipAddress', 'isapiUsername', 'isapiPassword']);
         $this->resetValidation();
 
@@ -289,9 +305,20 @@ new #[Title('Cameras')] class extends Component {
 <div>
     <x-page-header title="Cameras" subtitle="Devices feeding this site">
         <x-slot:actions>
-            <flux:button size="sm" variant="primary" wire:click="add">Add camera</flux:button>
+            @if ($this->canManageCameras)
+                <flux:button size="sm" variant="primary" wire:click="add">Add camera</flux:button>
+            @endif
         </x-slot:actions>
     </x-page-header>
+
+    @unless ($this->canManageCameras)
+        {{-- Security operators land here to check that cameras are alive.
+             The banner tells them plainly that camera config is not theirs
+             to change, so they know to escalate to the site owner. --}}
+        <div class="mb-5 rounded-lg border border-line bg-surface-2 p-3 text-sm text-ink-2">
+            You are viewing cameras in read-only mode. Ask the site owner to add, edit or remove a device.
+        </div>
+    @endunless
 
     <div class="mb-7 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
         <x-metric label="Cameras" :value="$this->cameras->count()" />
@@ -347,19 +374,23 @@ new #[Title('Cameras')] class extends Component {
                     </td>
                     <td class="border-b border-line py-2 text-right">
                         <div class="flex justify-end gap-1">
-                            @if ($camera->ingestion_mode !== App\Enums\IngestionMode::Stream)
-                                <flux:button size="xs" variant="ghost" wire:click="openSetup({{ $camera->id }})">Setup</flux:button>
+                            @if ($this->canManageCameras)
+                                @if ($camera->ingestion_mode !== App\Enums\IngestionMode::Stream)
+                                    <flux:button size="xs" variant="ghost" wire:click="openSetup({{ $camera->id }})">Setup</flux:button>
+                                @endif
+                                @if ($camera->ingestion_mode->needsInboundReach())
+                                    <flux:button size="xs" variant="ghost" wire:click="probe({{ $camera->id }})">Test</flux:button>
+                                @endif
+                                <flux:button size="xs" variant="ghost" wire:click="edit({{ $camera->id }})">Edit</flux:button>
+                                <flux:button
+                                    size="xs"
+                                    variant="ghost"
+                                    wire:click="delete({{ $camera->id }})"
+                                    wire:confirm="Remove {{ $camera->name }} and every plate event it recorded?"
+                                >Remove</flux:button>
+                            @else
+                                <span class="text-xs text-ink-muted">—</span>
                             @endif
-                            @if ($camera->ingestion_mode->needsInboundReach())
-                                <flux:button size="xs" variant="ghost" wire:click="probe({{ $camera->id }})">Test</flux:button>
-                            @endif
-                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $camera->id }})">Edit</flux:button>
-                            <flux:button
-                                size="xs"
-                                variant="ghost"
-                                wire:click="delete({{ $camera->id }})"
-                                wire:confirm="Remove {{ $camera->name }} and every plate event it recorded?"
-                            >Remove</flux:button>
                         </div>
                     </td>
                 </tr>

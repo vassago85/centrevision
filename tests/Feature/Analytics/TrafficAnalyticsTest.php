@@ -209,6 +209,50 @@ it('counts hourly arrivals for one specific day', function () {
         ->and($yesterday[9]['count'])->toBe(1);
 });
 
+it('lists the last entry detections, showing a re-entry as its own row', function () {
+    $camera = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
+
+    // Same plate seen entering twice, hours apart — the caller needs both
+    // rows, not the visits-deduplicated view.
+    $first = \App\Models\PlateEvent::factory()->for($camera)->create([
+        'plate_number' => 'FF98ZTGP',
+        'direction' => \App\Enums\PlateDirection::In,
+        'captured_at' => Date::now()->subHours(3),
+    ]);
+    $second = \App\Models\PlateEvent::factory()->for($camera)->create([
+        'plate_number' => 'FF98ZTGP',
+        'direction' => \App\Enums\PlateDirection::In,
+        'captured_at' => Date::now()->subMinutes(20),
+    ]);
+
+    // Exits should be ignored — Latest activity is an entry log.
+    \App\Models\PlateEvent::factory()->for($camera)->create([
+        'plate_number' => 'GONE001',
+        'direction' => \App\Enums\PlateDirection::Out,
+        'captured_at' => Date::now()->subMinutes(5),
+    ]);
+
+    // The most recent entry has a corresponding open visit → "on site now".
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'FF98ZTGP',
+        'entry_event_id' => $second->id,
+        'entered_at' => $second->captured_at,
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    $entries = $this->analytics->recentEntries();
+
+    expect($entries)->toHaveCount(2)
+        ->and($entries[0]->id)->toBe($second->id)
+        ->and($entries[0]->getAttribute('on_site_now'))->toBeTrue()
+        ->and($entries[1]->id)->toBe($first->id)
+        // FF98ZTGP has an open visit today, so both of its rows are flagged
+        // "on site now" — the pill reflects the plate's current status.
+        ->and($entries[1]->getAttribute('on_site_now'))->toBeTrue();
+});
+
 it('counts currently on-site vehicles across every accessible site', function () {
     // One open visit, one closed. Only the open one should be counted.
     Visit::factory()->for($this->site)->create([

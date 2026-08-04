@@ -269,22 +269,27 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * The last handful of visits at the tenant's site(s), used by the
-     * "Latest visits" card. Owner-only: shop accounts see aggregate KPIs
-     * only, never individual plates.
+     * The last handful of plate detections at the tenant's site(s), used by
+     * the "Latest activity" card. Backed by plate_events rather than visits
+     * so re-entries by the same vehicle are shown as separate rows — a
+     * visit that started at 12:00 and is still open would otherwise hide
+     * that same plate arriving again at 15:00.
      *
-     * @return Collection<int, Visit>
+     * Owner-only: shop accounts see aggregate KPIs only, never individual
+     * plates.
+     *
+     * @return Collection<int, PlateEvent>
      */
     #[Computed]
-    public function latestVisits(): Collection
+    public function latestEntries(): Collection
     {
         if (! $this->canSeePlates()) {
             return collect();
         }
 
         return $this->analytics()
-            ->recentVisits($this->range(), 6)
-            ->each(fn (Visit $v) => $v->makeVisible('plate_number'));
+            ->recentEntries(8)
+            ->each(fn (PlateEvent $e) => $e->makeVisible('plate_number'));
     }
 
     /**
@@ -557,11 +562,12 @@ new #[Title('Dashboard')] class extends Component
         @endif
     </div>
 
-    {{-- ── Latest visits ────────────────────────────────────────────────
-         Owner-only, and only rendered when we actually have plates to show:
-         a shop account, or an owner with no traffic yet, gets nothing rather
-         than an empty "0 rows" table. --}}
-    @if ($this->canSeePlates && $this->latestVisits->isNotEmpty())
+    {{-- ── Latest activity ──────────────────────────────────────────────
+         Every camera detection shows as its own row, so a vehicle that came
+         in twice appears twice — the visit-backed version hid re-entries
+         inside the still-open first visit and made the timestamps look stale.
+         Owner-only, and only rendered when we actually have plates. --}}
+    @if ($this->canSeePlates && $this->latestEntries->isNotEmpty())
     <div class="mb-6">
         <x-panel-card>
             <x-slot:header>
@@ -570,8 +576,8 @@ new #[Title('Dashboard')] class extends Component
                         <flux:icon icon="truck" class="size-4" />
                     </span>
                     <div>
-                        <p class="text-[13px] font-semibold text-ink">Latest visits</p>
-                        <p class="text-[11.5px] text-ink-muted">Most recent vehicles detected</p>
+                        <p class="text-[13px] font-semibold text-ink">Latest activity</p>
+                        <p class="text-[11.5px] text-ink-muted">Most recent camera detections</p>
                     </div>
                 </div>
                 <a href="{{ route('reports') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
@@ -581,28 +587,28 @@ new #[Title('Dashboard')] class extends Component
                 <thead>
                     <tr class="text-left text-[11px] uppercase tracking-[0.14em] text-ink-muted">
                         <th class="pb-2 font-semibold">Plate</th>
-                        <th class="pb-2 font-semibold">Entered</th>
-                        <th class="pb-2 font-semibold">Entry point</th>
-                        <th class="pb-2 text-right font-semibold">Dwell</th>
+                        <th class="pb-2 font-semibold">Detected</th>
+                        <th class="pb-2 font-semibold">Camera</th>
+                        <th class="pb-2 text-right font-semibold">Status</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach ($this->latestVisits as $visit)
-                        <tr class="border-t border-line" wire:key="latest-visit-{{ $visit->id }}">
+                    @foreach ($this->latestEntries as $entry)
+                        <tr class="border-t border-line" wire:key="latest-entry-{{ $entry->id }}">
                             <td class="py-2 font-mono font-semibold text-ink">
-                                {{ App\Support\PlateNumber::forDisplay($visit->plate_number) }}
+                                {{ App\Support\PlateNumber::forDisplay($entry->plate_number) }}
+                            </td>
+                            <td class="py-2 text-ink-2 tabular-nums">
+                                {{ $entry->captured_at->format('D H:i') }}
                             </td>
                             <td class="py-2 text-ink-2">
-                                {{ $visit->entered_at->format('D H:i') }}
+                                {{ $entry->camera?->name ?? '—' }}
                             </td>
-                            <td class="py-2 text-ink-2">
-                                {{ $visit->entryEvent?->camera?->name ?? '—' }}
-                            </td>
-                            <td class="py-2 text-right tabular-nums text-ink-2">
-                                @if ($visit->status === \App\Enums\VisitStatus::Open)
+                            <td class="py-2 text-right">
+                                @if ($entry->getAttribute('on_site_now'))
                                     <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
                                 @else
-                                    {{ number_format((int) $visit->dwell_minutes) }} min
+                                    <span class="text-[11.5px] text-ink-muted">Departed</span>
                                 @endif
                             </td>
                         </tr>

@@ -2,8 +2,10 @@
 
 namespace App\Support\Analytics;
 
+use App\Enums\PlateDirection;
 use App\Enums\PlateTagType;
 use App\Enums\VisitStatus;
+use App\Models\PlateEvent;
 use App\Models\PlateTag;
 use App\Models\Visit;
 use Carbon\CarbonInterface;
@@ -283,6 +285,46 @@ class TrafficAnalytics
             ->orderByDesc('entered_at')
             ->limit($limit)
             ->get();
+    }
+
+    /**
+     * The last N entry detections, as a raw transaction log.
+     *
+     * Backed by plate_events rather than visits so a vehicle that came in at
+     * 12:00 and again at 15:00 shows up as two rows (one per detection). The
+     * "Latest activity" card on the overview uses this — the visits table
+     * hid the second entry inside the first vehicle's still-open visit,
+     * which is what the user was seeing when the timestamp looked stale.
+     *
+     * Each row also carries whether the plate currently has an open visit,
+     * so the UI can flag "still on site" without a per-row query.
+     *
+     * @return Collection<int, PlateEvent>
+     */
+    public function recentEntries(int $limit = 10): Collection
+    {
+        $entries = PlateEvent::query()
+            ->where('direction', PlateDirection::In)
+            ->with('camera:id,name')
+            ->orderByDesc('captured_at')
+            ->limit($limit)
+            ->get();
+
+        if ($entries->isEmpty()) {
+            return $entries;
+        }
+
+        // One query for the "is this plate still on site" pill, rather than
+        // one per row.
+        $onSitePlates = Visit::query()
+            ->open()
+            ->whereIn('plate_number', $entries->pluck('plate_number')->unique())
+            ->pluck('plate_number')
+            ->flip();
+
+        return $entries->each(function (PlateEvent $event) use ($onSitePlates): void {
+            $event->setAttribute('on_site_now', $onSitePlates->has($event->plate_number));
+        });
     }
 
     /**

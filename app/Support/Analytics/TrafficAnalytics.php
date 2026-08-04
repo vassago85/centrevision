@@ -183,6 +183,20 @@ class TrafficAnalytics
     }
 
     /**
+     * True when any site the caller can currently see has at least one
+     * camera capable of reporting exits. Used by the dashboard to decide
+     * whether "Currently on site" and dwell KPIs are honest to show, or
+     * whether the site is running entries-only and those numbers should
+     * be reshaped.
+     */
+    public function hasExitTracking(): bool
+    {
+        return \App\Models\Camera::query()
+            ->whereIn('role', [\App\Enums\CameraRole::Exit->value, \App\Enums\CameraRole::Both->value])
+            ->exists();
+    }
+
+    /**
      * @return Collection<int, array{label: string, count: int, percent: float}>
      */
     public function dwellDistribution(DateRange $range): Collection

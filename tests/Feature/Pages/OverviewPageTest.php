@@ -131,7 +131,39 @@ it('leaves staff plates out of the headline numbers', function () {
     Livewire::test('pages::overview')->assertDontSee('STAFF001');
 });
 
+it('drops the currently-on-site and dwell KPIs when the site has no exit-capable camera', function () {
+    // Site has only the entrance camera from beforeEach; no Exit or Both.
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::withQueryParams(['range' => 'today'])
+        ->test('pages::overview')
+        // Entry-only sites cannot report a truthful "on site now" or dwell.
+        ->assertDontSee('Currently on site')
+        ->assertDontSee('Avg Dwell Time')
+        // Replaced with figures that entries-only data can actually compute.
+        ->assertSee('Peak hour')
+        ->assertSee('Repeat visitors')
+        // Honest disclosure of why dwell is missing.
+        ->assertSee('add an exit camera for dwell');
+});
+
+it('shows dwell and currently-on-site once an exit-capable camera is present', function () {
+    Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
+
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::withQueryParams(['range' => 'today'])
+        ->test('pages::overview')
+        ->assertSee('Currently on site')
+        ->assertSee('Avg Dwell Time')
+        ->assertDontSee('add an exit camera for dwell');
+});
+
 it('reshapes the dashboard for today, showing currently-on-site instead of return rate', function () {
+    // Add an exit camera so this test sees the full-tracking layout — the
+    // entry-only variant is exercised by the test above.
+    Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
+
     // A visit that's still open right now.
     Visit::factory()->for($this->site)->create([
         'plate_number' => 'ONSITE01',
@@ -157,6 +189,8 @@ it('reshapes the dashboard for today, showing currently-on-site instead of retur
 });
 
 it('shows the multi-period chart layout when today is not selected', function () {
+    Camera::factory()->for($this->site)->exit()->create();
+
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
     Livewire::test('pages::overview')

@@ -68,6 +68,19 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * True when the tenant's currently-viewed sites include at least one
+     * exit-capable camera. When false the dashboard is honest about the
+     * data it does not have — dwell and "currently on site" become
+     * meaningless without exit events, so we swap them for figures that
+     * still work with entries-only cameras.
+     */
+    #[Computed]
+    public function hasExitTracking(): bool
+    {
+        return $this->analytics()->hasExitTracking();
+    }
+
+    /**
      * All four KPIs plus their period-over-period comparisons. Fetched in one
      * place so the view is a straight render, and the labels/comparisons stay
      * in the same shape.
@@ -92,10 +105,21 @@ new #[Title('Dashboard')] class extends Component
 
         $vsLabel = $this->isToday ? 'vs yesterday' : 'vs previous period';
 
-        // Today mode swaps in a live "Currently on site" card in place of
-        // Return Rate, because a single-day return rate collapses to "plates
-        // seen twice today" and is more noise than signal.
-        if ($this->isToday) {
+        // Card 3 — Currently on site (today, with exits) / Return Rate
+        // (multi-day) / Peak hour (entries-only). A site without an exit
+        // camera cannot say "on site now" honestly, so we swap in a peak
+        // hour instead of pretending everyone that entered is still here.
+        if (! $this->hasExitTracking) {
+            $peak = $a->peakHour($range);
+
+            $thirdCard = [
+                'label' => 'Peak hour',
+                'value' => $peak === null ? '—' : $peak['label'],
+                'icon' => 'chart-bar',
+                'compare' => ['label' => $peak === null ? 'No arrivals yet' : $peak['count'].' visits', 'tone' => 'muted'],
+                'vs' => 'busiest hour in period',
+            ];
+        } elseif ($this->isToday) {
             $onSite = $a->currentlyOnSite();
             $peak = $a->peakHour($range);
 
@@ -119,6 +143,29 @@ new #[Title('Dashboard')] class extends Component
             ];
         }
 
+        // Card 4 — Avg Dwell (with exits) / Repeat visitors (entries-only).
+        // Dwell is undefined without exits, so entries-only gets a figure
+        // it can actually compute.
+        if (! $this->hasExitTracking) {
+            $repeat = $a->repeatVisitorPercentage($range);
+
+            $fourthCard = [
+                'label' => 'Repeat visitors',
+                'value' => $repeat === null ? '—' : $repeat.'%',
+                'icon' => 'arrow-path',
+                'compare' => ['label' => $repeat === null ? 'No prior data' : 'plates seen 2+ times', 'tone' => 'muted'],
+                'vs' => 'add an exit camera for dwell',
+            ];
+        } else {
+            $fourthCard = [
+                'label' => 'Avg Dwell Time',
+                'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
+                'icon' => 'clock',
+                'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
+                'vs' => 'median '.($dwell['median'] ?? '—').' min',
+            ];
+        }
+
         // Everything gets the same shape so the view is a data-driven loop.
         return [
             [
@@ -136,13 +183,7 @@ new #[Title('Dashboard')] class extends Component
                 'vs' => $vsLabel,
             ],
             $thirdCard,
-            [
-                'label' => 'Avg Dwell Time',
-                'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
-                'icon' => 'clock',
-                'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
-                'vs' => 'median '.($dwell['median'] ?? '—').' min',
-            ],
+            $fourthCard,
         ];
     }
 
@@ -589,7 +630,9 @@ new #[Title('Dashboard')] class extends Component
                         <th class="pb-2 font-semibold">Plate</th>
                         <th class="pb-2 font-semibold">Detected</th>
                         <th class="pb-2 font-semibold">Camera</th>
-                        <th class="pb-2 text-right font-semibold">Status</th>
+                        <th class="pb-2 text-right font-semibold">
+                            {{ $this->hasExitTracking ? 'Status' : 'Confidence' }}
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
@@ -605,10 +648,23 @@ new #[Title('Dashboard')] class extends Component
                                 {{ $entry->camera?->name ?? '—' }}
                             </td>
                             <td class="py-2 text-right">
-                                @if ($entry->getAttribute('on_site_now'))
-                                    <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
+                                @if ($this->hasExitTracking)
+                                    @if ($entry->getAttribute('on_site_now'))
+                                        <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
+                                    @else
+                                        <span class="text-[11.5px] text-ink-muted">Departed</span>
+                                    @endif
                                 @else
-                                    <span class="text-[11.5px] text-ink-muted">Departed</span>
+                                    @php $conf = $entry->confidence === null ? null : (int) round($entry->confidence * 100); @endphp
+                                    @if ($conf === null)
+                                        <span class="text-[11.5px] text-ink-muted">—</span>
+                                    @else
+                                        <span @class([
+                                            'text-[11.5px] tabular-nums',
+                                            'text-warning' => $conf < 85,
+                                            'text-ink-2' => $conf >= 85,
+                                        ])>{{ $conf }}%</span>
+                                    @endif
                                 @endif
                             </td>
                         </tr>

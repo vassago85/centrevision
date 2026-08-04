@@ -111,6 +111,20 @@ class Site extends Model implements SiteScoped
     }
 
     /**
+     * True when at least one camera on the site is capable of reporting
+     * vehicles leaving (either an exit camera or a bidirectional one). A
+     * site with only entrance cameras cannot produce dwell times or an
+     * accurate "on site now" count — the dashboard reshapes itself to be
+     * honest about that instead of showing figures that will never move.
+     */
+    public function hasExitTracking(): bool
+    {
+        return $this->cameras()
+            ->whereIn('role', [\App\Enums\CameraRole::Exit->value, \App\Enums\CameraRole::Both->value])
+            ->exists();
+    }
+
+    /**
      * @return HasManyThrough<PlateEvent, Camera, $this>
      */
     public function plateEvents(): HasManyThrough

@@ -458,7 +458,7 @@ new #[Title('Cameras')] class extends Component {
                     class="space-y-3"
                 >
                     <div>
-                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL (with secret in path — for Alarm Server without auth fields)</label>
+                        <label class="text-[13px] font-medium text-ink-2">Full URL (with secret in path)</label>
                         <div class="mt-1 flex gap-2">
                             <input
                                 type="text"
@@ -467,6 +467,43 @@ new #[Title('Cameras')] class extends Component {
                                 class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
                             />
                             <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrlWithToken() }}', 'URL')">Copy</flux:button>
+                        </div>
+                        <p class="mt-1 text-[12px] text-ink-muted">
+                            If the camera has one <em class="not-italic font-medium">URL</em> field, paste this whole string in.
+                            If it splits <em class="not-italic font-medium">Destination IP / Host Name</em> and <em class="not-italic font-medium">URL</em>, use the two split values below instead.
+                        </p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 rounded-tf border border-accent/40 bg-accent-soft p-3">
+                        <div>
+                            <label class="text-[12px] font-medium text-ink-2">Destination IP / Host Name</label>
+                            <div class="mt-1 flex gap-2">
+                                <input
+                                    type="text"
+                                    readonly
+                                    value="{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_HOST) }}"
+                                    class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[12px] text-ink"
+                                />
+                                <flux:button size="sm" variant="ghost" @click="copy('{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_HOST) }}', 'Host')">Copy</flux:button>
+                            </div>
+                            <p class="mt-1 text-[11px] text-ink-muted">Hostname only — no <code>https://</code>, no path.</p>
+                        </div>
+                        <div>
+                            <label class="text-[12px] font-medium text-ink-2">URL (path portion)</label>
+                            <div class="mt-1 flex gap-2">
+                                <input
+                                    type="text"
+                                    readonly
+                                    value="{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_PATH) }}"
+                                    class="flex-1 rounded-tf border border-line bg-surface px-3 py-2 font-mono text-[12px] text-ink"
+                                />
+                                <flux:button size="sm" variant="ghost" @click="copy('{{ parse_url($this->setupCamera->webhookUrlWithToken(), PHP_URL_PATH) }}', 'Path')">Copy</flux:button>
+                            </div>
+                            <p class="mt-1 text-[11px] text-ink-muted">Starts with <code>/</code>, includes the secret.</p>
+                        </div>
+                        <div class="col-span-2 flex gap-4 border-t border-line pt-2 text-[12px] text-ink-2">
+                            <span><span class="font-medium text-ink">Protocol:</span> <code>HTTPS</code> (fallback <code>HTTP</code>)</span>
+                            <span><span class="font-medium text-ink">Port:</span> <code>443</code> for HTTPS, <code>80</code> for HTTP</span>
                         </div>
                     </div>
 

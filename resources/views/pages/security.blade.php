@@ -15,6 +15,14 @@ new #[Title('Security')] class extends Component {
     #[Url(as: 'threshold', keep: true)]
     public int $thresholdHours = 0;
 
+    /**
+     * The date whose plate-detection log the owner is about to download.
+     * Defaults to today, and is capped to today in the UI so a future date
+     * cannot be requested. Any historic day with data is valid — an empty
+     * day just produces a CSV with only the header row.
+     */
+    public string $logDate = '';
+
     public function mount(): void
     {
         $options = $this->thresholdOptions();
@@ -24,6 +32,10 @@ new #[Title('Security')] class extends Component {
                 ?? (int) config('trafficflow.dwell_alert_hours');
 
             $this->thresholdHours = in_array($default, $options, true) ? $default : $options[0];
+        }
+
+        if ($this->logDate === '') {
+            $this->logDate = now()->toDateString();
         }
     }
 
@@ -93,12 +105,14 @@ new #[Title('Security')] class extends Component {
     }
 
     /**
-     * Stream every plate detection for the day as CSV. Only the site owner
-     * ever reaches this action (route middleware + policy), so the plate
-     * numbers this export contains stay inside the trust boundary POPIA
-     * defines for their site.
+     * Stream every plate detection for the picked day as CSV. Only the site
+     * owner ever reaches this action (route middleware + policy), so the
+     * plate numbers this export contains stay inside the trust boundary
+     * POPIA defines for their site. Refuses future dates and dates outside
+     * the site's retention window as a courtesy — the pruning job will
+     * already have wiped anything older.
      */
-    public function downloadTodayLog()
+    public function downloadLog()
     {
         $tenancy = app(Tenancy::class);
         $site = $tenancy->currentSite();
@@ -107,7 +121,21 @@ new #[Title('Security')] class extends Component {
 
         $this->authorize('viewSecurity', $site);
 
-        return app(SecurityLogExporter::class)->streamDay($site, now());
+        try {
+            $date = \Illuminate\Support\Facades\Date::parse($this->logDate);
+        } catch (\Throwable) {
+            Flux::toast(variant: 'danger', text: 'Pick a valid date to download.');
+
+            return;
+        }
+
+        if ($date->isAfter(now()->endOfDay())) {
+            Flux::toast(variant: 'danger', text: 'Cannot export a future date.');
+
+            return;
+        }
+
+        return app(SecurityLogExporter::class)->streamDay($site, $date);
     }
 }; ?>
 
@@ -115,12 +143,23 @@ new #[Title('Security')] class extends Component {
     <x-page-header title="Security · dwell alerts" :subtitle="(app(App\Support\Tenancy::class)->currentSite()?->name ?? 'All sites').' · live'">
         <x-slot:actions>
             @if (app(App\Support\Tenancy::class)->currentSite() !== null)
-                <flux:button
-                    size="sm"
-                    variant="ghost"
-                    icon="arrow-down-tray"
-                    wire:click="downloadTodayLog"
-                >Download today's log</flux:button>
+                <div class="flex items-center gap-2">
+                    <flux:input
+                        type="date"
+                        wire:model="logDate"
+                        :max="now()->toDateString()"
+                        size="sm"
+                        class="w-40"
+                        label="Log date"
+                        label:sr-only
+                    />
+                    <flux:button
+                        size="sm"
+                        variant="ghost"
+                        icon="arrow-down-tray"
+                        wire:click="downloadLog"
+                    >Download log</flux:button>
+                </div>
             @endif
             <flux:select wire:model.live="thresholdHours" size="sm" class="min-w-36" label="Threshold" label:sr-only>
                 @foreach ($this->thresholdOptions() as $hours)

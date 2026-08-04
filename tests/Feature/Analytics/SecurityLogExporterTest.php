@@ -86,3 +86,26 @@ it('does not include events from other days', function () {
     expect($csv)->toContain('TODAY01GP')
         ->not->toContain('YESTER1GP');
 });
+
+it('exports plate events for an arbitrary historic day', function () {
+    // Three events on three consecutive days. Requesting the middle day
+    // should return only that day's events.
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'DAY1AA1GP',
+        'captured_at' => Date::now()->subDays(3)->setTime(10, 0),
+    ]);
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'DAY2BB2GP',
+        'captured_at' => Date::now()->subDays(2)->setTime(10, 0),
+    ]);
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'DAY3CC3GP',
+        'captured_at' => Date::now()->subDay()->setTime(10, 0),
+    ]);
+
+    $csv = capturedCsv($this->site, Date::now()->subDays(2));
+
+    expect($csv)->toContain('DAY2BB2GP')
+        ->not->toContain('DAY1AA1GP')
+        ->not->toContain('DAY3CC3GP');
+});

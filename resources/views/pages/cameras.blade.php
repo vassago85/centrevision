@@ -426,7 +426,7 @@ new #[Title('Cameras')] class extends Component {
     {{-- ── Camera setup modal ────────────────────────────────────────────
          Shows the webhook URL + secret and step-by-step setup instructions
          so the operator can copy them straight into the Hikvision UI. --}}
-    <flux:modal wire:model.self="showSetup" @close="$wire.closeSetup()" class="md:w-[36rem]">
+    <flux:modal wire:model.self="showSetup" @@close="$wire.closeSetup()" class="md:w-[36rem]">
         @if ($this->setupCamera)
             <div class="space-y-5">
                 <div>

@@ -65,7 +65,7 @@ new #[Title('Subscription')] class extends Component {
             @endcan
 
             <flux:text class="text-[13px] text-ink-muted">
-                @php($billingEmail = config('trafficflow.billing_email'))
+                @php $billingEmail = config('trafficflow.billing_email'); @endphp
                 Need help? Email <a class="text-accent" href="mailto:{{ $billingEmail }}">{{ $billingEmail }}</a>.
             </flux:text>
         </div>

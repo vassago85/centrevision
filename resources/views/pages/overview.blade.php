@@ -348,7 +348,7 @@ new #[Title('Dashboard')] class extends Component
                 <a href="{{ route('cameras') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
             </x-slot:header>
 
-            @php($entries = $this->analytics->topEntryPoints($this->range))
+            @php $entries = $this->analytics->topEntryPoints($this->range); @endphp
             @if ($entries->isEmpty())
                 <x-placeholder>No entrance-camera arrivals in this period.</x-placeholder>
             @else
@@ -361,7 +361,7 @@ new #[Title('Dashboard')] class extends Component
                         </tr>
                     </thead>
                     <tbody>
-                        @php($totalCount = $entries->sum('count') ?: 1)
+                        @php $totalCount = $entries->sum('count') ?: 1; @endphp
                         @foreach ($entries as $entry)
                             <tr class="border-t border-line">
                                 <td class="py-2 text-ink">{{ $entry['label'] }}</td>

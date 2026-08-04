@@ -188,14 +188,14 @@ new #[Title('Watchlist')] class extends Component
     @endif
 
     <div class="mb-7 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        @php($counts = $this->entries->groupBy(fn ($e) => $e->kind->value)->map->count())
+        @php $counts = $this->entries->groupBy(fn ($e) => $e->kind->value)->map->count(); @endphp
         <x-metric label="Blocked" :value="(int) ($counts['block'] ?? 0)" variant="danger" />
         <x-metric label="Watch" :value="(int) ($counts['watch'] ?? 0)" variant="warn" />
         <x-metric label="VIP" :value="(int) ($counts['vip'] ?? 0)" variant="positive" />
     </div>
 
     @foreach ([WatchlistKind::Block, WatchlistKind::Watch, WatchlistKind::Vip] as $kind)
-        @php($rowsForKind = $this->entries->where('kind', $kind))
+        @php $rowsForKind = $this->entries->where('kind', $kind); @endphp
 
         <x-panel :heading="$kind->label().' ('.$rowsForKind->count().')'">
             <x-data-table
@@ -204,7 +204,7 @@ new #[Title('Watchlist')] class extends Component
                 :empty="'No '.strtolower($kind->label()).' entries.'"
             >
                 @foreach ($rowsForKind as $entry)
-                    @php($hits = $this->recentHits->get($entry->id))
+                    @php $hits = $this->recentHits->get($entry->id); @endphp
                     <tr>
                         <td class="border-b border-line py-2"><x-plate :number="$entry->plate_number" /></td>
                         <td class="border-b border-line py-2 text-ink-2">{{ $entry->site->name }}</td>

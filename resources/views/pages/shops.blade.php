@@ -267,7 +267,7 @@ new #[Title('Sub-accounts')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
-    @php($income = $this->tenantIncomeSplit)
+    @php $income = $this->tenantIncomeSplit; @endphp
     <div class="mb-6 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
         <x-metric label="Shops" :value="$this->shops->count()" delta="Total tenants" />
         <x-metric
@@ -287,7 +287,7 @@ new #[Title('Sub-accounts')] class extends Component {
          Explains where the "Drives your variable fee" number on the metric
          above actually goes, and shows the owner's real footprint so they
          can eyeball what they'd pay next month. --}}
-    @php($vf = $this->variableFeeSummary)
+    @php $vf = $this->variableFeeSummary; @endphp
     <div class="mb-7 flex items-start gap-4 rounded-tf border border-accent/30 bg-accent-soft p-5 dark:bg-accent-soft/40">
         <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-tf-sm">
             <flux:icon icon="information-circle" class="size-5" />

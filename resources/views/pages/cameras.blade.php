@@ -310,7 +310,12 @@ new #[Title('Cameras')] class extends Component {
             empty="No cameras yet. Add the first one to start ingesting plates."
         >
             @foreach ($this->cameras as $camera)
-                @php($status = $this->status($camera))
+                @php
+                    // Block form on purpose: the single-expression @php(...) form
+                    // miscompiles when it sits immediately after Livewire's
+                    // wire:key loop-iteration shim.
+                    $status = $this->status($camera);
+                @endphp
 
                 <tr wire:key="camera-{{ $camera->id }}">
                     <td class="border-b border-line py-2 font-medium">
@@ -426,7 +431,7 @@ new #[Title('Cameras')] class extends Component {
     {{-- ── Camera setup modal ────────────────────────────────────────────
          Shows the webhook URL + secret and step-by-step setup instructions
          so the operator can copy them straight into the Hikvision UI. --}}
-    <flux:modal wire:model.self="showSetup" @@close="$wire.closeSetup()" class="md:w-[36rem]">
+    <flux:modal wire:model.self="showSetup" @close="$wire.closeSetup()" class="md:w-[36rem]">
         @if ($this->setupCamera)
             <div class="space-y-5">
                 <div>

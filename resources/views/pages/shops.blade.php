@@ -345,7 +345,9 @@ new #[Title('Sub-accounts')] class extends Component {
             empty="No shops yet. Invite your first tenant to start reselling."
         >
             @foreach ($this->shops as $shop)
-                @php($badge = $this->statusBadge($shop->shopSubscription))
+                @php
+                    $badge = $this->statusBadge($shop->shopSubscription);
+                @endphp
 
                 <tr wire:key="shop-{{ $shop->id }}">
                     <td class="border-b border-line py-2 font-medium">{{ $shop->name }}</td>

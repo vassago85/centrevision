@@ -129,7 +129,9 @@ new #[Title('Security')] class extends Component {
             empty="Nothing has been on site longer than {{ $thresholdHours }} hours."
         >
             @foreach ($this->overThreshold as $visit)
-                @php($minutes = $visit->minutesOnSite())
+                @php
+                    $minutes = $visit->minutesOnSite();
+                @endphp
 
                 <tr wire:key="over-{{ $visit->id }}">
                     <td class="border-b border-line py-2"><x-plate :number="$visit->plate_number" /></td>

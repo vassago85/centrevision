@@ -194,7 +194,9 @@ new #[Title('Billing')] class extends Component {
             empty="No invoices have been issued yet."
         >
             @foreach ($this->invoices as $invoice)
-                @php($badge = $this->invoiceBadge($invoice))
+                @php
+                    $badge = $this->invoiceBadge($invoice);
+                @endphp
 
                 <tr wire:key="invoice-{{ $invoice->id }}">
                     <td class="border-b border-line py-2 font-mono text-xs">{{ $invoice->number }}</td>

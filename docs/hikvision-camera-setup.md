@@ -30,7 +30,17 @@ camera-side clicks.
 
 ## 1. Register CentreVision as the HTTP Listening host
 
-Configuration → **Network** → **Advanced Settings** → **HTTP Listening**
+The menu path depends on which firmware the camera is running:
+
+- **Firmware 5.7.x and later:** `Configuration → Network → Network Service → HTTP Listening`
+- **Older firmware:** `Configuration → Network → Advanced Settings → HTTP Listening`
+
+Both land you on the same page.
+
+> ⚠️ **Do not** use `Configuration → Network → Platform Access → Hik-Connect`.
+> That tab is Hikvision's consumer cloud service ("hik-connect.com") and is
+> unrelated to a raw HTTP webhook. Leave it disabled unless the customer
+> separately uses the Hik-Connect phone app for something else.
 
 Fill in exactly:
 

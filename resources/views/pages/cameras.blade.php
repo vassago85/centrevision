@@ -500,17 +500,34 @@ new #[Title('Cameras')] class extends Component {
 
                 <div class="rounded-tf border border-line bg-surface-2 p-4 text-[13px]">
                     <p class="mb-2 font-semibold text-ink">Steps in the Hikvision UI</p>
-                    <ol class="ml-4 list-decimal space-y-1 text-ink-2">
-                        <li>Log into the camera as admin.</li>
+                    <ol class="ml-4 list-decimal space-y-1.5 text-ink-2">
+                        <li>Log into the camera as <code>admin</code>.</li>
                         <li>
-                            <span class="font-medium text-ink">Configuration → Network → Advanced Settings → HTTP Listening</span>:
-                            enable it, paste the URL above, set Protocol to <code>HTTP</code> (the reverse proxy handles TLS),
-                            HTTP Method to <code>POST</code>, Data Type to <code>XML</code>, User Name to the camera id, and Password to the secret.
+                            Open <span class="font-medium text-ink">Configuration → Network</span>, then click
+                            <span class="font-medium text-ink">Network Service</span> (on older firmware, look for
+                            <span class="font-medium text-ink">Advanced Settings</span> instead — same page,
+                            different label). Find the <span class="font-medium text-ink">HTTP Listening</span> tab.
+                        </li>
+                        <li>
+                            Enable it and add one destination server with:
+                            <ul class="ml-4 mt-1 list-disc space-y-0.5">
+                                <li><span class="font-medium text-ink">URL:</span> paste the URL above (the camera will parse the <code>https://</code>, host and path).</li>
+                                <li><span class="font-medium text-ink">Protocol:</span> <code>HTTP</code> — the reverse proxy handles TLS; leaving it as <code>HTTPS</code> works too if the firmware offers it.</li>
+                                <li><span class="font-medium text-ink">HTTP Method:</span> <code>POST</code>.</li>
+                                <li><span class="font-medium text-ink">Data Type:</span> <code>XML</code>.</li>
+                                <li><span class="font-medium text-ink">User Name / Password:</span> the camera id and secret above.</li>
+                            </ul>
+                            <em class="not-italic block pt-1 text-ink-muted">
+                                <strong>Do not</strong> touch the "Platform Access → Hik-Connect" tab —
+                                that is Hikvision's consumer cloud, unrelated to this webhook.
+                            </em>
                         </li>
                         <li>
                             <span class="font-medium text-ink">Configuration → Event → Smart Event → Road Traffic → Vehicle Detection</span>:
-                            on the <span class="font-medium text-ink">Linkage Method</span> tab, tick
-                            <span class="font-medium text-ink">HTTP Listening</span> (and any other channels you want; this one is required).
+                            open the <span class="font-medium text-ink">Linkage Method</span> tab and tick
+                            <span class="font-medium text-ink">HTTP Listening</span> for each detection rule.
+                            (Some firmware calls this row <span class="font-medium text-ink">Notify Surveillance Center</span>
+                            or lists it under an "Other" pane — both post to the same HTTP Listening host you set above.)
                         </li>
                         <li>Save. Drive a plate past and watch the "Last event" column on this page tick over.</li>
                     </ol>

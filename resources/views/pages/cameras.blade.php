@@ -458,7 +458,20 @@ new #[Title('Cameras')] class extends Component {
                     class="space-y-3"
                 >
                     <div>
-                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL</label>
+                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL (with secret in path — for Alarm Server without auth fields)</label>
+                        <div class="mt-1 flex gap-2">
+                            <input
+                                type="text"
+                                readonly
+                                value="{{ $this->setupCamera->webhookUrlWithToken() }}"
+                                class="flex-1 rounded-tf border border-line bg-surface-2 px-3 py-2 font-mono text-[12.5px] text-ink"
+                            />
+                            <flux:button size="sm" variant="ghost" @click="copy('{{ $this->setupCamera->webhookUrlWithToken() }}', 'URL')">Copy</flux:button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="text-[13px] font-medium text-ink-2">HTTP Listening URL (auth-header variant)</label>
                         <div class="mt-1 flex gap-2">
                             <input
                                 type="text"
@@ -503,31 +516,33 @@ new #[Title('Cameras')] class extends Component {
                     <ol class="ml-4 list-decimal space-y-1.5 text-ink-2">
                         <li>Log into the camera as <code>admin</code>.</li>
                         <li>
-                            Open <span class="font-medium text-ink">Configuration → Network</span>, then click
-                            <span class="font-medium text-ink">Network Service</span> (on older firmware, look for
-                            <span class="font-medium text-ink">Advanced Settings</span> instead — same page,
-                            different label). Find the <span class="font-medium text-ink">HTTP Listening</span> tab.
-                        </li>
-                        <li>
-                            Enable it and add one destination server with:
+                            Open the destination-server page. It has moved across firmwares:
                             <ul class="ml-4 mt-1 list-disc space-y-0.5">
-                                <li><span class="font-medium text-ink">URL:</span> paste the URL above (the camera will parse the <code>https://</code>, host and path).</li>
-                                <li><span class="font-medium text-ink">Protocol:</span> <code>HTTP</code> — the reverse proxy handles TLS; leaving it as <code>HTTPS</code> works too if the firmware offers it.</li>
-                                <li><span class="font-medium text-ink">HTTP Method:</span> <code>POST</code>.</li>
-                                <li><span class="font-medium text-ink">Data Type:</span> <code>XML</code>.</li>
-                                <li><span class="font-medium text-ink">User Name / Password:</span> the camera id and secret above.</li>
+                                <li><span class="font-medium text-ink">Event → Basic Event → Alarm Server</span> <em class="not-italic text-ink-muted">(newer firmware, no auth fields — use the first URL above)</em></li>
+                                <li><span class="font-medium text-ink">Network → Network Service → HTTP Listening</span></li>
+                                <li><span class="font-medium text-ink">Network → Advanced Settings → HTTP Listening</span> <em class="not-italic text-ink-muted">(older firmware, has auth fields — use the second URL + username/password)</em></li>
                             </ul>
                             <em class="not-italic block pt-1 text-ink-muted">
-                                <strong>Do not</strong> touch the "Platform Access → Hik-Connect" tab —
-                                that is Hikvision's consumer cloud, unrelated to this webhook.
+                                <strong>Do not</strong> use <span class="font-medium">Network → Platform Access → Hik-Connect</span> —
+                                that's Hikvision's consumer cloud, nothing to do with this webhook.
                             </em>
                         </li>
                         <li>
-                            <span class="font-medium text-ink">Configuration → Event → Smart Event → Road Traffic → Vehicle Detection</span>:
+                            Click <span class="font-medium text-ink">Add</span> and fill it in:
+                            <ul class="ml-4 mt-1 list-disc space-y-0.5">
+                                <li><span class="font-medium text-ink">Destination IP or Host Name:</span> <code>centrevision.co.za</code></li>
+                                <li><span class="font-medium text-ink">URL:</span> the path portion of the URL you copied above.</li>
+                                <li><span class="font-medium text-ink">Protocol Type:</span> <code>HTTP</code> — the reverse proxy handles TLS.</li>
+                                <li><span class="font-medium text-ink">Port No.:</span> <code>443</code>.</li>
+                                <li>Leave ANR on — the camera will buffer and retry events on network drops.</li>
+                                <li>If the page has User Name / Password fields, paste the camera id and secret from above.</li>
+                            </ul>
+                        </li>
+                        <li>
+                            <span class="font-medium text-ink">Event → Smart Event → Road Traffic → Vehicle Detection</span>:
                             open the <span class="font-medium text-ink">Linkage Method</span> tab and tick
-                            <span class="font-medium text-ink">HTTP Listening</span> for each detection rule.
-                            (Some firmware calls this row <span class="font-medium text-ink">Notify Surveillance Center</span>
-                            or lists it under an "Other" pane — both post to the same HTTP Listening host you set above.)
+                            <span class="font-medium text-ink">Notify Surveillance Center</span> (some firmware calls
+                            this row <span class="font-medium text-ink">HTTP Listening</span>) for every detection rule.
                         </li>
                         <li>Save. Drive a plate past and watch the "Last event" column on this page tick over.</li>
                     </ol>

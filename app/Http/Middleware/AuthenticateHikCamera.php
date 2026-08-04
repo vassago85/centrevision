@@ -11,9 +11,17 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Authenticates a Hikvision camera calling our webhook.
  *
- * Cameras are configured with HTTP Basic:
- *  - username = camera id (integer, as decimal string)
- *  - password = camera->webhook_secret (48-char token)
+ * Cameras present their credentials one of two ways:
+ *
+ *  1. HTTP Basic — for firmwares where the "HTTP Listening" screen still
+ *     exposes User Name / Password fields.
+ *       username = camera id (integer, as decimal string)
+ *       password = camera->webhook_secret (48-char token)
+ *
+ *  2. Trailing URL segment — for newer firmwares where "Alarm Server" only
+ *     takes a URL and no auth. The secret becomes the last segment of the
+ *     URL: /webhooks/hik/{camera}/{secret}. Traffic is still HTTPS-terminated
+ *     at the reverse proxy so the secret is never in the clear on the wire.
  *
  * The camera id also appears in the URL as {camera}, so an attacker who
  * captures a request cannot re-target the credentials at a different camera.
@@ -45,16 +53,25 @@ class AuthenticateHikCamera
             return $this->unauthorized();
         }
 
-        [$user, $pass] = $this->basicCredentials($request);
+        // Prefer Basic when the camera sent it; fall back to the URL-embedded
+        // token otherwise. hash_equals is constant-time to close off a
+        // per-byte timing oracle.
+        $secret = (string) $camera->webhook_secret;
+        $authenticated = false;
 
-        if ($user === null || $pass === null) {
-            return $this->unauthorized();
+        [$user, $pass] = $this->basicCredentials($request);
+        if ($user !== null && $pass !== null) {
+            $authenticated = ((int) $user === $cameraId) && hash_equals($secret, $pass);
         }
 
-        // Constant-time comparison stops a timing side channel giving away the
-        // secret one character at a time. The camera id is compared straight
-        // because it is already public in the URL.
-        if ((int) $user !== $cameraId || ! hash_equals((string) $camera->webhook_secret, $pass)) {
+        if (! $authenticated) {
+            $token = (string) ($request->route('token') ?? '');
+            if ($token !== '') {
+                $authenticated = hash_equals($secret, $token);
+            }
+        }
+
+        if (! $authenticated) {
             return $this->unauthorized();
         }
 

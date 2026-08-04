@@ -132,6 +132,25 @@ class Camera extends Model implements SiteScoped
     }
 
     /**
+     * A self-authenticating URL variant with the secret baked into the path.
+     *
+     * Some Hikvision firmwares ship an "Alarm Server" configuration screen
+     * that only exposes a URL field — no username/password — so we cannot
+     * rely on HTTP Basic on those cameras. Handing the operator a URL that
+     * carries the secret means the same webhook still works with zero auth
+     * fields on the camera side, and the middleware validates the token in
+     * exactly the same way it validates a Basic password.
+     *
+     * The secret still only ever travels over TLS to the reverse proxy.
+     */
+    public function webhookUrlWithToken(): string
+    {
+        $secret = (string) $this->webhook_secret;
+
+        return url("/webhooks/hik/{$this->getKey()}/".rawurlencode($secret));
+    }
+
+    /**
      * Regenerate the shared secret and persist. Returns the fresh plaintext
      * so it can be shown to the operator exactly once; on subsequent renders
      * it is only available via the encrypted cast.

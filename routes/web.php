@@ -25,9 +25,13 @@ Route::post('webhooks/paystack', PaystackWebhookController::class)->name('webhoo
 // Hikvision cameras post plate events here over HTTPS. The camera holds the
 // connection open until we answer, so the handler stages the payload and
 // dispatches a queued job — everything database-facing runs on the worker.
-// AuthenticateHikCamera enforces HTTP Basic against the per-camera secret.
-Route::post('webhooks/hik/{camera}', HikvisionWebhookController::class)
+// AuthenticateHikCamera accepts either HTTP Basic against the per-camera
+// secret (older Hikvision firmware) or the same secret as a trailing path
+// segment (newer firmware whose "Alarm Server" screen doesn't expose auth
+// fields — see docs/hikvision-camera-setup.md).
+Route::post('webhooks/hik/{camera}/{token?}', HikvisionWebhookController::class)
     ->where('camera', '[0-9]+')
+    ->where('token', '[A-Za-z0-9_-]{8,128}')
     ->middleware(['auth.hik-camera', 'throttle:hik-webhook'])
     ->name('webhooks.hik');
 

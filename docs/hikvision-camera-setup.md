@@ -28,37 +28,60 @@ The **Setup** button on the Cameras page opens a modal with the URL and secret
 already filled in, so this doc is mainly the mirror-image reference for the
 camera-side clicks.
 
-## 1. Register CentreVision as the HTTP Listening host
+## 1. Register CentreVision as the destination server
 
-The menu path depends on which firmware the camera is running:
+Hikvision has renamed and moved this page several times. On any recent
+DeepinView firmware it will be in one of these three places:
 
-- **Firmware 5.7.x and later:** `Configuration → Network → Network Service → HTTP Listening`
-- **Older firmware:** `Configuration → Network → Advanced Settings → HTTP Listening`
+- `Configuration → Event → Basic Event → Alarm Server` **← newest firmware, most common now**
+- `Configuration → Network → Network Service → HTTP Listening`
+- `Configuration → Network → Advanced Settings → HTTP Listening` *(older)*
 
-Both land you on the same page.
+They all do the same job: register one destination server that the camera
+will POST events to. If you cannot find "HTTP Listening" as a page anywhere,
+open **Event → Basic Event** and look for the **Alarm Server** tab — the
+`iDS-2CD7A46G0/P-IZHS` puts it there on firmware `V5.7.20` and later.
 
 > ⚠️ **Do not** use `Configuration → Network → Platform Access → Hik-Connect`.
 > That tab is Hikvision's consumer cloud service ("hik-connect.com") and is
 > unrelated to a raw HTTP webhook. Leave it disabled unless the customer
 > separately uses the Hik-Connect phone app for something else.
 
-Fill in exactly:
+CentreVision offers **two URL variants** for each camera. Both are shown in
+the in-app setup modal, and the middleware accepts either. Pick the one that
+matches your firmware's UI:
+
+### Variant A — `URL only` (Alarm Server on newer firmware, no auth fields)
+
+The camera's Alarm Server / HTTP Listening panel exposes only a
+`Destination IP`, `URL`, `Protocol`, and `Port No.` — no username or password
+input. Use the URL that ends with `/webhooks/hik/{camera_id}/{secret}`. The
+per-camera secret becomes the last path segment; TLS from the reverse proxy
+keeps it off the wire.
+
+| Field                       | Value                                              |
+|-----------------------------|----------------------------------------------------|
+| Destination IP or Host Name | `centrevision.co.za`                               |
+| URL                         | `/webhooks/hik/{camera_id}/{secret}`               |
+| Protocol Type               | `HTTP` (reverse proxy terminates TLS)              |
+| Port No.                    | `443`                                              |
+| ANR                         | On — the camera will retry buffered events on drop |
+
+### Variant B — `URL + Basic auth` (older HTTP Listening firmware)
+
+The panel has explicit `User Name` and `Password` fields. Paste the plain URL
+and use HTTP Basic auth.
 
 | Field                | Value                                                     |
 |----------------------|-----------------------------------------------------------|
 | Enable HTTP Listening| On                                                        |
-| Destination IP / URL | The full URL from the setup modal (`https://...`)         |
+| Destination IP / URL | The plain URL from the setup modal (`https://...`)        |
 | Protocol             | `HTTP` (the reverse proxy terminates TLS for us)          |
 | HTTP Method          | `POST`                                                    |
-| Port                 | Leave as `80` — it is ignored when the URL is a full URL  |
+| Port                 | `443` for `https://`, `80` for `http://`                  |
 | Data Type            | `XML`                                                     |
 | User Name            | The camera id shown in the setup modal (the number)       |
 | Password             | The secret shown in the setup modal                       |
-
-Newer firmware exposes only a URL field; older firmware asks for `Destination
-IP`, `Port`, and `URL` separately. In the latter case, set the URL to just the
-path (`/webhooks/hik/12`), the IP to the public CentreVision hostname, and
-port to `443`.
 
 Save. The camera will not test the endpoint here; verification happens once an
 event fires.
@@ -100,7 +123,8 @@ If nothing arrives, work down the failure ladder in the next section.
   customer firewall.
 - On the camera, `Configuration → Maintenance → Log`: filter to `Network`
   events; a failed POST logs the HTTP response code.
-- `curl -u {cameraId}:{secret} https://api.centrevision.co.za/webhooks/hik/{cameraId}`
+- `curl -u {cameraId}:{secret} https://centrevision.co.za/webhooks/hik/{cameraId}`
+  or `curl https://centrevision.co.za/webhooks/hik/{cameraId}/{secret}`
   from any laptop on the customer network should return `200 OK`. `401` means
   the credentials are wrong or the camera is inactive. `429` means the rate
   limiter tripped (unlikely under normal traffic).

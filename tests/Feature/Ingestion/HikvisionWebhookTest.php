@@ -145,6 +145,27 @@ it('refuses a request with no Authorization header', function () {
     postHikWebhook($this->camera, hikXml(), 'application/xml', auth: null)->assertStatus(401);
 });
 
+it('accepts a request whose secret is passed as a URL path segment', function () {
+    // Newer Hikvision "Alarm Server" firmware has no auth fields — the
+    // camera can only paste a URL. This variant carries the secret as the
+    // last segment of the URL so the same middleware still authenticates.
+    $server = ['CONTENT_TYPE' => 'application/xml'];
+
+    test()->call('POST', "/webhooks/hik/{$this->camera->id}/office-secret", [], [], [], $server, hikXml())
+        ->assertOk();
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->sole()->plate_number)->toBe('JD45GP');
+});
+
+it('refuses a URL-token request whose token is wrong', function () {
+    $server = ['CONTENT_TYPE' => 'application/xml'];
+
+    test()->call('POST', "/webhooks/hik/{$this->camera->id}/wrong-secret-abcdefghijklm", [], [], [], $server, hikXml())
+        ->assertStatus(401);
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->count())->toBe(0);
+});
+
 it('refuses a request for an inactive camera', function () {
     $this->camera->update(['is_active' => false]);
 

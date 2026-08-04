@@ -544,12 +544,14 @@ new #[Title('Cameras')] class extends Component {
                     </div>
 
                     {{-- Older firmware: HTTP Listening with real Basic auth fields.
-                         Kept collapsed so it doesn't distract from the common case. --}}
-                    <details class="rounded-tf border border-line bg-surface p-3">
-                        <summary class="cursor-pointer text-[12px] font-semibold text-ink-2">
-                            Only if your camera's page has User Name / Password fields (older HTTP Listening firmware)
-                        </summary>
-                        <div class="mt-3 space-y-3">
+                         Kept as a plain bordered block rather than a <details>
+                         element: Blade's compiler mis-parses directive-heavy
+                         children of <details>. --}}
+                    <div class="rounded-tf border border-line bg-surface p-3">
+                        <p class="mb-3 text-[12px] font-semibold text-ink-2">
+                            Only if the camera also asks for User Name / Password (older HTTP Listening firmware)
+                        </p>
+                        <div class="space-y-3">
                             <div>
                                 <label class="text-[12px] font-medium text-ink-2">URL (no secret in path)</label>
                                 <div class="mt-1 flex gap-2">
@@ -590,7 +592,7 @@ new #[Title('Cameras')] class extends Component {
                                 </div>
                             </div>
                         </div>
-                    </details>
+                    </div>
                 </div>
 
                 <div class="rounded-tf border border-line bg-surface-2 p-4 text-[13px]">

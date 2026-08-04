@@ -72,6 +72,19 @@ new #[Title('Security')] class extends Component {
     }
 
     /**
+     * True when the currently-viewed site has no camera that can report
+     * exits. Dwell-based alerts are meaningless in that case, so the UI
+     * shows a small note explaining why those figures are always zero.
+     */
+    #[Computed]
+    public function isEntryOnly(): bool
+    {
+        $site = app(Tenancy::class)->currentSite();
+
+        return $site !== null && ! $site->hasExitTracking();
+    }
+
+    /**
      * Flag a plate for the security team. This is the one place plate data is
      * written by hand, and it records a plate only: no owner, no description.
      */
@@ -169,11 +182,24 @@ new #[Title('Security')] class extends Component {
         </x-slot:actions>
     </x-page-header>
 
+    @if ($this->isEntryOnly)
+        <div class="mb-5 flex items-start gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3 text-[13px]">
+            <flux:icon icon="information-circle" class="mt-0.5 size-4 shrink-0 text-accent" />
+            <div class="text-ink-2">
+                <p class="font-medium text-ink">This site has no exit camera.</p>
+                <p class="mt-0.5 text-[12px] text-ink-muted">
+                    Dwell alerts and "no exit recorded" figures below can't be produced without an exit-capable camera, so they will always read zero. Entry-based alerts (odd-hour arrivals, multiple entries today) work as normal.
+                </p>
+            </div>
+        </div>
+    @endif
+
     <div class="mb-7 grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
         <x-metric
             label="Over threshold now"
             :value="$this->overThreshold->count()"
             :variant="$this->overThreshold->isEmpty() ? 'default' : 'danger'"
+            :delta="$this->isEntryOnly ? 'requires exit camera' : null"
         />
         <x-metric
             label="Odd-hour recurring"
@@ -185,7 +211,11 @@ new #[Title('Security')] class extends Component {
             :value="$this->multiEntry->count()"
             :delta="config('trafficflow.security.multi_entry_threshold').'+ entries, same plate'"
         />
-        <x-metric label="No exit recorded" :value="$this->security->orphanedCount()" delta="last 7 days" />
+        <x-metric
+            label="No exit recorded"
+            :value="$this->security->orphanedCount()"
+            :delta="$this->isEntryOnly ? 'requires exit camera' : 'last 7 days'"
+        />
     </div>
 
     <x-panel heading="Currently over threshold">

@@ -17,6 +17,11 @@ beforeEach(function () {
     $this->owner = Organization::factory()->owner()->create();
     $this->site = Site::factory()->for_($this->owner)->create();
     $this->camera = Camera::factory()->for($this->site)->entrance()->create(['name' => 'North entrance']);
+    // Existing tests were written assuming the site has both an entrance and
+    // an exit camera. The dashboard now filters dwell-based metrics to sites
+    // with exit tracking, so add the exit camera here to keep the suite
+    // exercising the "with exit" path; the entry-only path has its own tests.
+    Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
 
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
@@ -194,6 +199,7 @@ it('counts recent visits that never recorded an exit', function () {
 
 it('does not leak another owner security data', function () {
     $otherSite = Site::factory()->create();
+    Camera::factory()->for($otherSite)->exit()->create();
 
     Visit::factory()->for($otherSite)->create([
         'plate_number' => 'OTHER1GP',
@@ -204,4 +210,52 @@ it('does not leak another owner security data', function () {
     ]);
 
     expect($this->security->overThreshold(4))->toBeEmpty();
+});
+
+it('excludes entry-only sites from dwell threshold alerts', function () {
+    // A second site with no exit camera. A vehicle that entered hours ago
+    // would look like it's over the dwell threshold, but for entry-only
+    // sites we cannot tell if it has actually left through the unmonitored
+    // gate — so it must not be flagged.
+    $entryOnlySite = Site::factory()->for_($this->owner)->create();
+    $entryOnlyCamera = Camera::factory()->for($entryOnlySite)->entrance()->create();
+
+    Visit::factory()->for($entryOnlySite)->create([
+        'plate_number' => 'ENTRY01GP',
+        'entered_at' => Date::now()->subHours(8),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    // On the exit-tracked site, a similar visit *should* be flagged.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'TRACKED1GP',
+        'entered_at' => Date::now()->subHours(8),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    $rows = $this->security->overThreshold(4);
+
+    expect($rows->pluck('plate_number')->all())->toBe(['TRACKED1GP']);
+});
+
+it('excludes entry-only sites from the no-exit-recorded count', function () {
+    $entryOnlySite = Site::factory()->for_($this->owner)->create();
+    Camera::factory()->for($entryOnlySite)->entrance()->create();
+
+    // Orphaned visit at an entry-only site is expected, not an anomaly.
+    Visit::factory()->for($entryOnlySite)->create([
+        'entered_at' => Date::now()->subDays(2),
+        'status' => VisitStatus::Orphaned,
+    ]);
+    // Orphaned visit at an exit-tracked site is a genuine data issue.
+    Visit::factory()->for($this->site)->create([
+        'entered_at' => Date::now()->subDays(2),
+        'status' => VisitStatus::Orphaned,
+    ]);
+
+    expect($this->security->orphanedCount())->toBe(1);
 });

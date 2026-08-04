@@ -20,6 +20,10 @@ beforeEach(function () {
         'settings' => ['dwell_alert_hours' => 4],
     ]);
     $this->camera = Camera::factory()->for($this->site)->entrance()->create(['name' => 'North entrance']);
+    // The Security page filters dwell-based alerts to sites with exit
+    // tracking, so add an exit camera here to keep the suite exercising
+    // the "with exit" path. Entry-only sites are covered by their own test.
+    Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
 
     $this->user = actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 });
@@ -114,4 +118,29 @@ it('shows the camera that caught the vehicle coming in', function () {
     ]);
 
     Livewire::test('pages::security')->assertSee('North entrance');
+});
+
+it('shows an entry-only notice and suppresses phantom dwell alerts when a site has no exit camera', function () {
+    // A separate entry-only site under the same owner, focused via the
+    // tenant switcher so the page reads it as the current site.
+    $entryOnly = Site::factory()->for_($this->owner)->create(['name' => 'Zentech']);
+    Camera::factory()->for($entryOnly)->entrance()->create();
+
+    // A vehicle that entered hours ago would normally be flagged as
+    // over-threshold; on an entry-only site it must not be.
+    Visit::factory()->for($entryOnly)->create([
+        'plate_number' => 'ENTRY01GP',
+        'entered_at' => Date::now()->subHours(8),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    app(App\Support\Tenancy::class)->setCurrentSiteId($entryOnly->id);
+
+    Livewire::test('pages::security')
+        ->assertSee('This site has no exit camera.')
+        ->assertSee('requires exit camera')
+        // The plate is not treated as a dwell breach.
+        ->assertDontSee('ENTRY01GP');
 });

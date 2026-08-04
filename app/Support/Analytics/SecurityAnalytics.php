@@ -2,8 +2,10 @@
 
 namespace App\Support\Analytics;
 
+use App\Enums\CameraRole;
 use App\Enums\PlateDirection;
 use App\Enums\VisitStatus;
+use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Visit;
 use Illuminate\Support\Collection;
@@ -23,6 +25,11 @@ class SecurityAnalytics
      * Open visits that have been on site longer than the threshold, longest
      * first. Ordering by entry time ascending puts the worst case at the top.
      *
+     * Entry-only sites are excluded: without an exit camera the app cannot
+     * tell whether a vehicle is still on site or has left through an
+     * unmonitored gate, so flagging every four-hour-old entry as a dwell
+     * breach would drown the security team in false positives.
+     *
      * @return Collection<int, Visit>
      */
     public function overThreshold(int $thresholdHours): Collection
@@ -30,10 +37,30 @@ class SecurityAnalytics
         return Visit::query()
             ->open()
             ->where('entered_at', '<=', Date::now()->subHours($thresholdHours))
+            ->whereIn('site_id', $this->sitesWithExitTracking())
             ->with(['site:id,name', 'entryEvent.camera:id,name'])
             ->orderBy('entered_at')
             ->get();
     }
+
+    /**
+     * Site ids the current tenant can reach that have at least one camera
+     * capable of reporting exits. Cached per instance because the security
+     * page hits it from three different methods on every render.
+     *
+     * @return array<int, int>
+     */
+    protected function sitesWithExitTracking(): array
+    {
+        return $this->sitesWithExitTrackingCache ??= Camera::query()
+            ->whereIn('role', [CameraRole::Exit->value, CameraRole::Both->value])
+            ->distinct()
+            ->pluck('site_id')
+            ->all();
+    }
+
+    /** @var array<int, int>|null */
+    protected ?array $sitesWithExitTrackingCache = null;
 
     /**
      * Plates seen entering between the small hours, on more than one day
@@ -134,12 +161,16 @@ class SecurityAnalytics
     /**
      * Visits that never produced an exit event, which usually means a camera
      * missed the vehicle leaving rather than that it is still there.
+     *
+     * Entry-only sites are excluded — for them a missing exit is expected,
+     * not an anomaly, so counting them would make every site look broken.
      */
     public function orphanedCount(int $days = 7): int
     {
         return Visit::query()
             ->where('status', VisitStatus::Orphaned)
             ->where('entered_at', '>=', Date::now()->subDays($days))
+            ->whereIn('site_id', $this->sitesWithExitTracking())
             ->count();
     }
 }

@@ -232,6 +232,12 @@ new #[Title('Dashboard')] class extends Component
      * Watchlist- and security-related counts for the alert card. Grouped so
      * the shell can drive the notification bell off the same numbers.
      *
+     * The bell counts events that happened *after* the user last visited
+     * /security (their `alerts_last_seen_at`), so opening the security page
+     * clears the badge until new events arrive. First-time visitors — with
+     * no acknowledgement on file yet — fall back to a 24h window so the
+     * bell is neither perpetually silent nor screaming with history.
+     *
      * @return array{watchlist: int, blacklist: int, other: int, total: int}
      */
     #[Computed]
@@ -240,10 +246,10 @@ new #[Title('Dashboard')] class extends Component
         $security = app(SecurityAnalytics::class);
         $siteIds = app(Tenancy::class)->scopeSiteIds();
 
-        // Watchlist / blacklist hits — plate_events in the last 24h that
-        // match a watchlist entry. Joined once and split by kind.
-        $windowStart = now()->subDay();
+        $windowStart = auth()->user()?->alerts_last_seen_at ?? now()->subDay();
 
+        // Watchlist / blacklist hits — plate_events since the user last
+        // acknowledged their alerts. Joined once and split by kind.
         $hitsByKind = PlateEvent::query()
             ->withoutGlobalScope(SiteScope::class)
             ->join('cameras', 'cameras.id', '=', 'plate_events.camera_id')
@@ -252,7 +258,7 @@ new #[Title('Dashboard')] class extends Component
                     ->on('cameras.site_id', '=', 'watchlist_plates.site_id');
             })
             ->whereIn('watchlist_plates.site_id', $siteIds)
-            ->where('plate_events.captured_at', '>=', $windowStart)
+            ->where('plate_events.captured_at', '>', $windowStart)
             ->toBase()
             ->selectRaw('watchlist_plates.kind, COUNT(*) as hits')
             ->groupBy('watchlist_plates.kind')
@@ -268,8 +274,28 @@ new #[Title('Dashboard')] class extends Component
         $dwellHours = (int) (app(Tenancy::class)->currentSite()?->settings['dwell_alert_hours']
             ?? config('trafficflow.security.default_dwell_alert_hours', 4));
 
-        $other = $security->overThreshold($dwellHours)->count()
-            + $security->multipleEntriesToday()->count();
+        // Only count *new* breaches: over-threshold visits that entered
+        // recently enough to have crossed the threshold since the user last
+        // checked, and multi-entry plates whose latest arrival is newer than
+        // that acknowledgement. Anything older has already been seen on the
+        // security page, so no need to re-alert.
+        $newOverThreshold = $security->overThreshold($dwellHours)
+            ->filter(fn ($visit) => $visit->entered_at->gt($windowStart->copy()->subHours($dwellHours)))
+            ->count();
+
+        $newMultiEntry = $security->multipleEntriesToday()
+            ->filter(function (array $row) use ($windowStart) {
+                $latest = end($row['times']);
+
+                return is_string($latest) && $latest !== ''
+                    // Times are strings like "14:45"; combine with today's date
+                    // to compare against the seen_at timestamp.
+                    && \Illuminate\Support\Facades\Date::createFromFormat('Y-m-d H:i', now()->toDateString().' '.$latest)
+                        ?->gt($windowStart);
+            })
+            ->count();
+
+        $other = $newOverThreshold + $newMultiEntry;
 
         return [
             'watchlist' => $watchlistHits,

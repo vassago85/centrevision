@@ -37,6 +37,11 @@ new #[Title('Security')] class extends Component {
         if ($this->logDate === '') {
             $this->logDate = now()->toDateString();
         }
+
+        // Landing on the security page counts as acknowledging any pending
+        // alerts — this is what clears the dashboard bell for the current
+        // user until new events arrive.
+        auth()->user()?->markAlertsSeen();
     }
 
     /**

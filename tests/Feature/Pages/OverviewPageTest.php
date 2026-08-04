@@ -79,6 +79,56 @@ it('shows the security and watchlist cards to owners', function () {
         ->assertSee('Recent Watchlist Hits');
 });
 
+it('counts a watchlist hit as a new alert when the user has never visited security', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // The HIT001GP watchlist plate + event exists from beforeEach. With
+    // alerts_last_seen_at null, the 24h fallback window applies and the
+    // event (20 minutes old) counts.
+    $component = Livewire::test('pages::overview');
+
+    $counts = $component->instance()->alertCounts;
+
+    expect($counts['watchlist'])->toBe(1)
+        ->and($counts['total'])->toBeGreaterThan(0);
+});
+
+it('clears the notification count after the user visits security', function () {
+    $user = actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Visit /security — this stamps alerts_last_seen_at on the user.
+    Livewire::test('pages::security');
+
+    // The watchlist event from beforeEach is now older than seen_at, so it
+    // should no longer count as new.
+    $counts = Livewire::test('pages::overview')->instance()->alertCounts;
+
+    expect($counts['watchlist'])->toBe(0)
+        ->and($counts['blacklist'])->toBe(0)
+        ->and($counts['total'])->toBe(0);
+});
+
+it('bumps the count again when a new event arrives after acknowledgement', function () {
+    $user = actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Acknowledge existing alerts.
+    Livewire::test('pages::security');
+
+    // Advance the clock so the new event is unambiguously after the
+    // acknowledgement timestamp — same-second collisions would otherwise
+    // hide the alert we're trying to prove is visible.
+    $this->travel(1)->minutes();
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'HIT001GP',
+        'captured_at' => Date::now(),
+    ]);
+
+    $counts = Livewire::test('pages::overview')->instance()->alertCounts;
+
+    expect($counts['watchlist'])->toBe(1);
+});
+
 it('sends a platform admin to the cross-tenant view', function () {
     actingAsTenant(User::factory()->platformAdmin()->create());
 

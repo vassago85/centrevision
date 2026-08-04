@@ -26,6 +26,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property string $name
  * @property string $email
  * @property CarbonInterface|null $email_verified_at
+ * @property CarbonInterface|null $alerts_last_seen_at
  * @property string $password
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
@@ -60,9 +61,21 @@ class User extends Authenticatable implements PasskeyUser
     {
         return [
             'email_verified_at' => 'datetime',
+            'alerts_last_seen_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
         ];
+    }
+
+    /**
+     * Stamp the moment this user last acknowledged their security alerts.
+     * Called from the Security page's mount hook — the dashboard bell shows
+     * only events that happened after this timestamp, so opening /security
+     * clears the badge until new events arrive.
+     */
+    public function markAlertsSeen(): void
+    {
+        $this->forceFill(['alerts_last_seen_at' => now()])->saveQuietly();
     }
 
     protected static function booted(): void

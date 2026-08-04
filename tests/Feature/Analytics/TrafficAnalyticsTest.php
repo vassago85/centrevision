@@ -184,3 +184,47 @@ it('zero-fills days with no traffic', function () {
         ->and($days->sum('count'))->toBe(1)
         ->and($days->last()['count'])->toBe(1);
 });
+
+it('counts hourly arrivals for one specific day', function () {
+    // Two arrivals today, one yesterday at the same hour so we can prove the
+    // day filter is doing its job.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'TODAY1GP',
+        'entered_at' => Date::now()->startOfDay()->addHours(9)->addMinutes(15),
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'TODAY2GP',
+        'entered_at' => Date::now()->startOfDay()->addHours(9)->addMinutes(50),
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'YESTER1GP',
+        'entered_at' => Date::now()->subDay()->startOfDay()->addHours(9),
+    ]);
+
+    $today = $this->analytics->visitsByHourOnDay(Date::now());
+    $yesterday = $this->analytics->visitsByHourOnDay(Date::now()->subDay());
+
+    expect($today)->toHaveCount(24)
+        ->and($today[9]['count'])->toBe(2)
+        ->and($yesterday[9]['count'])->toBe(1);
+});
+
+it('counts currently on-site vehicles across every accessible site', function () {
+    // One open visit, one closed. Only the open one should be counted.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'ONSITE01',
+        'entered_at' => Date::now()->subMinutes(30),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'GONE001',
+        'entered_at' => Date::now()->subHours(4),
+        'exited_at' => Date::now()->subHours(2),
+        'dwell_minutes' => 120,
+        'status' => VisitStatus::Closed,
+    ]);
+
+    expect($this->analytics->currentlyOnSite())->toBe(1);
+});

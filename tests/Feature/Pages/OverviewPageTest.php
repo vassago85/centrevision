@@ -131,6 +131,42 @@ it('leaves staff plates out of the headline numbers', function () {
     Livewire::test('pages::overview')->assertDontSee('STAFF001');
 });
 
+it('reshapes the dashboard for today, showing currently-on-site instead of return rate', function () {
+    // A visit that's still open right now.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'ONSITE01',
+        'entered_at' => Date::now()->subMinutes(30),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::withQueryParams(['range' => 'today'])
+        ->test('pages::overview')
+        ->assertSet('rangeKey', 'today')
+        // Today mode swaps in a live counter for the return-rate KPI.
+        ->assertSee('Currently on site')
+        ->assertDontSee('Return Rate')
+        // Comparison caption changes to "vs yesterday" instead of "vs previous period".
+        ->assertSee('vs yesterday')
+        // Chart row collapses to one "today vs yesterday" chart.
+        ->assertSee('Today, hour by hour')
+        ->assertDontSee('Visits Over Time');
+});
+
+it('shows the multi-period chart layout when today is not selected', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::test('pages::overview')
+        ->assertSet('rangeKey', '7d')
+        ->assertSee('Return Rate')
+        ->assertSee('Visits Over Time')
+        ->assertSee('Visits by Time of Day')
+        ->assertDontSee('Currently on site');
+});
+
 it('narrows the heading and figures to the selected site', function () {
     $second = Site::factory()->for_($this->owner)->create(['name' => 'Mall B']);
     $secondCam = Camera::factory()->for($second)->entrance()->create();

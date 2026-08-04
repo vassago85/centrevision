@@ -6,6 +6,7 @@ use App\Enums\PlateTagType;
 use App\Enums\VisitStatus;
 use App\Models\PlateTag;
 use App\Models\Visit;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
@@ -137,6 +138,46 @@ class TrafficAnalytics
         $peak = $this->visitsByHour($range)->sortByDesc('count')->first();
 
         return ($peak['count'] ?? 0) > 0 ? $peak : null;
+    }
+
+    /**
+     * Hourly arrivals for one specific day, zero-filled. Used by the Today
+     * dashboard's grouped "today vs yesterday" chart, where each series is
+     * one calendar day rather than an arbitrary window.
+     *
+     * @return Collection<int, array{hour: int, label: string, count: int}>
+     */
+    public function visitsByHourOnDay(CarbonInterface $day): Collection
+    {
+        $start = $day->copy()->startOfDay();
+        $end = $day->copy()->endOfDay();
+
+        $counts = Visit::query()
+            ->excludingRecurring()
+            ->whereNot('status', VisitStatus::Orphaned)
+            ->enteredBetween($start, $end)
+            ->selectRaw('extract(hour from entered_at)::int as hour, count(*) as total')
+            ->groupBy('hour')
+            ->pluck('total', 'hour');
+
+        return collect(range(0, 23))->map(fn (int $hour) => [
+            'hour' => $hour,
+            'label' => sprintf('%02d:00', $hour),
+            'count' => (int) ($counts[$hour] ?? 0),
+        ]);
+    }
+
+    /**
+     * Vehicles currently on site (open visits). Not a windowed metric — it is
+     * a live count, so the Today dashboard can show pulse-of-the-day figures
+     * without pretending they're historical.
+     */
+    public function currentlyOnSite(): int
+    {
+        return Visit::query()
+            ->excludingRecurring()
+            ->open()
+            ->count();
     }
 
     /**

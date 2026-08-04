@@ -57,6 +57,17 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * True when the range picker is showing "Today". The dashboard reshapes
+     * around this: single-day comparisons make period-over-period charts
+     * meaningless, so today mode swaps them out for pulse-of-the-day cards.
+     */
+    #[Computed]
+    public function isToday(): bool
+    {
+        return $this->range->key === 'today';
+    }
+
+    /**
      * All four KPIs plus their period-over-period comparisons. Fetched in one
      * place so the view is a straight render, and the labels/comparisons stay
      * in the same shape.
@@ -76,11 +87,37 @@ new #[Title('Dashboard')] class extends Component
         $unique = $a->uniqueVehicles($range);
         $prevUnique = $a->uniqueVehicles($previous);
 
-        $returnRate = $a->returnRatePercentage($range);
-        $prevReturn = $a->returnRatePercentage($previous);
-
         $dwell = $a->dwellSummary($range);
         $prevDwell = $a->dwellSummary($previous);
+
+        $vsLabel = $this->isToday ? 'vs yesterday' : 'vs previous period';
+
+        // Today mode swaps in a live "Currently on site" card in place of
+        // Return Rate, because a single-day return rate collapses to "plates
+        // seen twice today" and is more noise than signal.
+        if ($this->isToday) {
+            $onSite = $a->currentlyOnSite();
+            $peak = $a->peakHour($range);
+
+            $thirdCard = [
+                'label' => 'Currently on site',
+                'value' => number_format($onSite),
+                'icon' => 'map-pin',
+                'compare' => ['label' => $onSite === 0 ? 'No open visits' : 'Live', 'tone' => $onSite === 0 ? 'muted' : 'up'],
+                'vs' => $peak === null ? 'No arrivals yet today' : 'Busiest hour: '.$peak['label'],
+            ];
+        } else {
+            $returnRate = $a->returnRatePercentage($range);
+            $prevReturn = $a->returnRatePercentage($previous);
+
+            $thirdCard = [
+                'label' => 'Return Rate',
+                'value' => $returnRate === null ? '—' : $returnRate.'%',
+                'icon' => 'arrow-path',
+                'compare' => $a->comparison($returnRate, $prevReturn),
+                'vs' => 'excluding staff plates',
+            ];
+        }
 
         // Everything gets the same shape so the view is a data-driven loop.
         return [
@@ -89,22 +126,16 @@ new #[Title('Dashboard')] class extends Component
                 'value' => number_format($visits),
                 'icon' => 'truck',
                 'compare' => $a->comparison($visits, $prevVisits),
-                'vs' => 'vs previous period',
+                'vs' => $vsLabel,
             ],
             [
                 'label' => 'Unique Vehicles',
                 'value' => number_format($unique),
                 'icon' => 'user-group',
                 'compare' => $a->comparison($unique, $prevUnique),
-                'vs' => 'vs previous period',
+                'vs' => $vsLabel,
             ],
-            [
-                'label' => 'Return Rate',
-                'value' => $returnRate === null ? '—' : $returnRate.'%',
-                'icon' => 'arrow-path',
-                'compare' => $a->comparison($returnRate, $prevReturn),
-                'vs' => 'excluding staff plates',
-            ],
+            $thirdCard,
             [
                 'label' => 'Avg Dwell Time',
                 'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
@@ -112,6 +143,25 @@ new #[Title('Dashboard')] class extends Component
                 'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
                 'vs' => 'median '.($dwell['median'] ?? '—').' min',
             ],
+        ];
+    }
+
+    /**
+     * Today's hourly arrivals alongside yesterday's, for the grouped bar
+     * chart on the Today dashboard.
+     *
+     * @return array{labels: array<int, string>, today: array<int, int>, yesterday: array<int, int>}
+     */
+    #[Computed]
+    public function hourlyTodayVsYesterday(): array
+    {
+        $today = $this->analytics->visitsByHourOnDay(now());
+        $yesterday = $this->analytics->visitsByHourOnDay(now()->subDay());
+
+        return [
+            'labels' => $today->pluck('label')->all(),
+            'today' => $today->pluck('count')->all(),
+            'yesterday' => $yesterday->pluck('count')->all(),
         ];
     }
 
@@ -249,10 +299,12 @@ new #[Title('Dashboard')] class extends Component
     }
 }; ?>
 
-<div>
+<div @if ($this->isToday) wire:poll.60s @endif>
     {{-- Header — the mockup's page title + range picker + bell. Shops don't
          see the notification bell because it would only ever link to alerts
-         they aren't allowed to view. --}}
+         they aren't allowed to view. Today mode polls every minute so the
+         "currently on site" counter and hourly bars stay live without a
+         manual refresh. --}}
     <x-dashboard-header
         :title="$this->heading"
         :subtitle="'Vehicle traffic · '.strtolower($this->range->label)"
@@ -282,7 +334,35 @@ new #[Title('Dashboard')] class extends Component
         @endforeach
     </div>
 
-    {{-- ── Charts row ─────────────────────────────────────────────────── --}}
+    {{-- ── Charts row ───────────────────────────────────────────────────
+         Today mode collapses the two-chart row into one wide "today vs
+         yesterday, hour by hour" chart — daily bars are meaningless for a
+         single-day range, and the hour-of-day chart is now the single most
+         useful view.  --}}
+    @if ($this->isToday)
+    <div class="mb-6">
+        <x-panel-card>
+            <x-slot:header>
+                <div>
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Today, hour by hour</p>
+                    <p class="mt-1 text-sm text-ink-2">Arrivals so far today, compared to the same hour yesterday</p>
+                </div>
+                <span class="rounded-full bg-accent-soft px-3 py-1 text-[11px] font-medium text-accent">Live</span>
+            </x-slot:header>
+
+            <x-chart
+                :labels="$this->hourlyTodayVsYesterday['labels']"
+                :series="[
+                    ['label' => 'Today', 'values' => $this->hourlyTodayVsYesterday['today'], 'color' => 'accent'],
+                    ['label' => 'Yesterday', 'values' => $this->hourlyTodayVsYesterday['yesterday'], 'color' => 'accentSoft'],
+                ]"
+                :show-legend="true"
+                :height="240"
+                aria-label="Grouped bar chart comparing hourly arrivals today to the same hours yesterday"
+            />
+        </x-panel-card>
+    </div>
+    @else
     <div class="mb-6 grid grid-cols-2 gap-4 max-lg:grid-cols-1">
         <x-panel-card>
             <x-slot:header>
@@ -322,6 +402,7 @@ new #[Title('Dashboard')] class extends Component
             />
         </x-panel-card>
     </div>
+    @endif
 
     {{-- ── Bottom row: entry points | alerts | recent hits ──────────────
          Shops only see the aggregate entry points; security and watchlist

@@ -13,6 +13,35 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    # phpunit.xml pins DB_CONNECTION=pgsql on 127.0.0.1:5432, and composer setup
+    # runs `artisan migrate --force`, so CI needs a real Postgres reachable on
+    # localhost. A service container is the least surprising way to give it one.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          # phpunit.xml pins DB_PASSWORD to "" so the container has to accept
+          # passwordless local connections. `trust` auth is safe here because
+          # the service is only reachable from inside the runner.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: trafficflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: trafficflow_test
+      DB_USERNAME: postgres
+      DB_PASSWORD: ''
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,6 +54,7 @@ jobs:
           # composer.lock resolves Symfony 8.x which requires PHP 8.4.1+.
           # Keep this pinned to 8.4 to match the production Docker image.
           php-version: '8.4'
+          extensions: pdo_pgsql, pgsql, mbstring, bcmath, intl, gd
           tools: composer:v2
           coverage: none
 
@@ -32,6 +62,19 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h 127.0.0.1 -p 5432 -U postgres; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres..."
+            sleep 2
+          done
+          echo "Postgres never became ready"
+          exit 1
 
       - name: Setup Application
         run: composer setup

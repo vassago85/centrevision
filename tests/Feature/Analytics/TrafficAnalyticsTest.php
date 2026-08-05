@@ -61,7 +61,12 @@ it('leaves staff-pattern plates out of every shopper figure', function () {
         ->and($this->analytics->repeatVisitorPercentage($this->range))->toBe(0.0);
 });
 
-it('ignores orphaned visits, which never really happened as measured', function () {
+it('ignores orphaned visits on sites that can measure exits', function () {
+    // With an exit camera in play, "orphaned" means we opened a visit for an
+    // entry but never saw the vehicle leave — a data-quality issue we do not
+    // want polluting the shopper figures.
+    \App\Models\Camera::factory()->exit()->create(['site_id' => $this->site->id]);
+
     visitAt($this->site, 'AA11GP', 2);
 
     Visit::factory()->for($this->site)->create([
@@ -72,6 +77,25 @@ it('ignores orphaned visits, which never really happened as measured', function 
     ]);
 
     expect($this->analytics->totalVisits($this->range))->toBe(1);
+});
+
+it('counts orphaned visits on entry-only sites so yesterday still shows up', function () {
+    // No exit camera — every visit will eventually be marked orphaned by the
+    // MatchVisits job, but each of those still represents a real arrival
+    // that should show on the dashboard.
+    \App\Models\Camera::factory()->entrance()->create(['site_id' => $this->site->id]);
+
+    visitAt($this->site, 'AA11GP', 2);
+
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'BB22GP',
+        'entered_at' => Date::now()->subHours(20),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Orphaned,
+    ]);
+
+    expect($this->analytics->totalVisits($this->range))->toBe(2);
 });
 
 it('reports average and median dwell over closed visits only', function () {

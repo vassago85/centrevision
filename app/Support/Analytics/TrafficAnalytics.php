@@ -156,7 +156,7 @@ class TrafficAnalytics
 
         $counts = Visit::query()
             ->excludingRecurring()
-            ->whereNot('status', VisitStatus::Orphaned)
+            ->when($this->hasExitTracking(), fn ($q) => $q->whereNot('status', VisitStatus::Orphaned))
             ->enteredBetween($start, $end)
             ->selectRaw('extract(hour from entered_at)::int as hour, count(*) as total')
             ->groupBy('hour')
@@ -191,10 +191,16 @@ class TrafficAnalytics
      */
     public function hasExitTracking(): bool
     {
-        return \App\Models\Camera::query()
+        return $this->hasExitTracking ??= \App\Models\Camera::query()
             ->whereIn('role', [\App\Enums\CameraRole::Exit->value, \App\Enums\CameraRole::Both->value])
             ->exists();
     }
+
+    /**
+     * Cached result of hasExitTracking() so per-request analytics don't hit
+     * the cameras table for every KPI.
+     */
+    protected ?bool $hasExitTracking = null;
 
     /**
      * @return Collection<int, array{label: string, count: int, percent: float}>
@@ -445,9 +451,19 @@ class TrafficAnalytics
      */
     protected function baseQuery(DateRange $range): Builder
     {
-        return Visit::query()
+        $query = Visit::query()
             ->excludingRecurring()
-            ->whereNot('status', VisitStatus::Orphaned)
             ->enteredBetween($range->from, $range->to);
+
+        // "Orphaned" means we opened a visit for an entry event and never saw
+        // the matching exit event. On a site that has exit cameras that is a
+        // data-quality issue and we drop it. On an entry-only site every
+        // visit will eventually be orphaned by design, and dropping them
+        // would wipe historic days off the dashboard — so we keep them.
+        if ($this->hasExitTracking()) {
+            $query->whereNot('status', VisitStatus::Orphaned);
+        }
+
+        return $query;
     }
 }

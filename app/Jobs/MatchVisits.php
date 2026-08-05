@@ -164,9 +164,18 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
     /**
      * A vehicle still marked as on site long past the site's threshold left
      * without being seen: mark it orphaned so it stops skewing live counts.
+     *
+     * Skipped for entry-only sites — with no exit camera there is never an
+     * exit event to "close" a visit, so every open visit would eventually
+     * age out and vanish from the dashboard. On those sites, an unclosed
+     * visit is not an error; it is simply an arrival.
      */
     protected function orphanStaleVisits(Site $site): void
     {
+        if (! $site->hasExitTracking()) {
+            return;
+        }
+
         $cutoff = now()->subHours($site->orphanAfterHours());
 
         $this->openVisitQuery($site)

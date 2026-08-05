@@ -129,6 +129,21 @@ it('leaves a visit open when it is still inside the threshold', function () {
     expect(Visit::query()->sole()->status)->toBe(VisitStatus::Open);
 });
 
+it('does not orphan stale visits on entry-only sites', function () {
+    // Entry-only site — remove the exit camera so hasExitTracking() is false.
+    // On such sites there will never be an exit event to close a visit, so
+    // orphaning by age would silently erase every historic day from the
+    // dashboard. The visit must stay Open.
+    $this->exit->delete();
+    $this->site->update(['settings' => ['orphan_after_hours' => 4]]);
+
+    PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subHours(9))->create();
+
+    MatchVisits::dispatchSync();
+
+    expect(Visit::query()->sole()->status)->toBe(VisitStatus::Open);
+});
+
 it('does not close a visit with an exit recorded before the entry', function () {
     PlateEvent::factory()->for($this->exit)->plateNumber('JD45GP')->exiting(now()->subHours(3))->create();
     PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subHour())->create();

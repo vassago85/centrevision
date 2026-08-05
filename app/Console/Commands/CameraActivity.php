@@ -34,7 +34,9 @@ class CameraActivity extends Command
     protected $signature = 'camera:activity
         {--day= : Day to inspect (YYYY-MM-DD). Defaults to today.}
         {--camera= : Only report on one camera id.}
-        {--all : Show every camera, even ones with zero activity today.}';
+        {--all : Show every camera, even ones with zero activity today.}
+        {--list : Also print every parsed event (time, plate, direction, camera).}
+        {--limit=200 : Max rows in the --list output.}';
 
     protected $description = 'Show received Hikvision notifications per camera for a given day';
 
@@ -173,7 +175,75 @@ class CameraActivity extends Command
             );
         }
 
+        if ($this->option('list')) {
+            $this->listEvents($cameras, $start, $end, (int) $this->option('limit'));
+        }
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Print every parsed plate event in the window, oldest first, so the
+     * ordering matches how the cameras actually saw them. Truncated at
+     * --limit rows with a hint about how many were dropped.
+     *
+     * @param  \Illuminate\Support\Collection<int, Camera>  $cameras
+     */
+    protected function listEvents(\Illuminate\Support\Collection $cameras, Carbon $start, Carbon $end, int $limit): void
+    {
+        $query = PlateEvent::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->whereIn('camera_id', $cameras->pluck('id'))
+            ->whereBetween('captured_at', [$start, $end]);
+
+        $total = (clone $query)->count();
+
+        if ($total === 0) {
+            $this->newLine();
+            $this->components->info('No parsed events in the window.');
+
+            return;
+        }
+
+        $events = $query
+            ->with('camera:id,name')
+            ->orderBy('captured_at')
+            ->limit(max($limit, 1))
+            ->get(['id', 'camera_id', 'plate_number', 'direction', 'captured_at', 'confidence']);
+
+        $rows = $events->map(function (PlateEvent $event): array {
+            $direction = $event->direction?->value;
+
+            return [
+                'time' => $event->captured_at->format('H:i:s'),
+                'plate' => $event->plate_number,
+                'direction' => match ($direction) {
+                    'in' => 'In',
+                    'out' => 'Out',
+                    default => '—',
+                },
+                'camera' => $event->camera?->name ?? '—',
+                'confidence' => $event->confidence === null
+                    ? '—'
+                    : round((float) $event->confidence * 100).'%',
+            ];
+        })->all();
+
+        $this->newLine();
+        $this->components->info('Events in capture order:');
+        $this->table(
+            ['Time', 'Plate', 'Direction', 'Camera', 'Confidence'],
+            $rows,
+        );
+
+        if ($total > $limit) {
+            $this->components->warn(sprintf(
+                'Showing first %d of %d events. Re-run with --limit=%d to see them all.',
+                $limit,
+                $total,
+                $total,
+            ));
+        }
     }
 
     /**

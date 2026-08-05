@@ -66,6 +66,42 @@ it('counts files parked in quarantine and warns about parser failures', function
         ->assertSuccessful();
 });
 
+it('lists every event with plate and direction when --list is set', function () {
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'FF98ZTGP',
+        'direction' => PlateDirection::In,
+        'captured_at' => now()->startOfDay()->addHours(7)->addMinutes(15),
+        'confidence' => 0.92,
+    ]);
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'BY96NWGP',
+        'direction' => PlateDirection::In,
+        'captured_at' => now()->startOfDay()->addHours(7)->addMinutes(32),
+        'confidence' => 0.87,
+    ]);
+
+    $this->artisan('camera:activity', ['--list' => true])
+        ->expectsOutputToContain('Events in capture order')
+        ->expectsOutputToContain('FF98ZTGP')
+        ->expectsOutputToContain('BY96NWGP')
+        ->expectsOutputToContain('In')
+        ->assertSuccessful();
+});
+
+it('caps --list output at --limit and reports the total', function () {
+    for ($i = 0; $i < 5; $i++) {
+        PlateEvent::factory()->for($this->camera)->create([
+            'plate_number' => 'AAA'.$i.'11',
+            'direction' => PlateDirection::In,
+            'captured_at' => now()->startOfDay()->addHours(8)->addMinutes($i),
+        ]);
+    }
+
+    $this->artisan('camera:activity', ['--list' => true, '--limit' => 2])
+        ->expectsOutputToContain('Showing first 2 of 5 events')
+        ->assertSuccessful();
+});
+
 it('scopes to a single camera when --camera is provided', function () {
     $otherCamera = Camera::factory()->for($this->site)->entrance()->create(['name' => 'Back Gate']);
 

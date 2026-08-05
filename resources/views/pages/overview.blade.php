@@ -355,7 +355,7 @@ new #[Title('Dashboard')] class extends Component
         }
 
         return $this->analytics()
-            ->recentEntries(8)
+            ->recentDetections(8)
             ->each(fn (PlateEvent $e) => $e->makeVisible('plate_number'));
     }
 
@@ -656,6 +656,7 @@ new #[Title('Dashboard')] class extends Component
                         <th class="pb-2 font-semibold">Plate</th>
                         <th class="pb-2 font-semibold">Detected</th>
                         <th class="pb-2 font-semibold">Camera</th>
+                        <th class="pb-2 font-semibold">Direction</th>
                         <th class="pb-2 text-right font-semibold">
                             {{ $this->hasExitTracking ? 'Status' : 'Confidence' }}
                         </th>
@@ -672,6 +673,17 @@ new #[Title('Dashboard')] class extends Component
                             </td>
                             <td class="py-2 text-ink-2">
                                 {{ $entry->camera?->name ?? '—' }}
+                            </td>
+                            <td class="py-2">
+                                @php $isIn = $entry->direction === \App\Enums\PlateDirection::In; @endphp
+                                <span @class([
+                                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]',
+                                    'bg-accent-soft text-accent' => $isIn,
+                                    'bg-warning-soft text-warning' => ! $isIn,
+                                ])>
+                                    <flux:icon :icon="$isIn ? 'arrow-down-right' : 'arrow-up-left'" class="size-3" />
+                                    {{ $isIn ? 'In' : 'Out' }}
+                                </span>
                             </td>
                             <td class="py-2 text-right">
                                 @if ($this->hasExitTracking)

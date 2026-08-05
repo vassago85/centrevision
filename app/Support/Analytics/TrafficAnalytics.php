@@ -308,7 +308,8 @@ class TrafficAnalytics
     }
 
     /**
-     * The last N entry detections, as a raw transaction log.
+     * The last N plate detections, as a raw transaction log — entries and
+     * exits both, in capture-time order.
      *
      * Backed by plate_events rather than visits so a vehicle that came in at
      * 12:00 and again at 15:00 shows up as two rows (one per detection). The
@@ -321,10 +322,10 @@ class TrafficAnalytics
      *
      * @return Collection<int, PlateEvent>
      */
-    public function recentEntries(int $limit = 10): Collection
+    public function recentDetections(int $limit = 10): Collection
     {
         $entries = PlateEvent::query()
-            ->where('direction', PlateDirection::In)
+            ->whereNotNull('direction')
             ->with('camera:id,name')
             ->orderByDesc('captured_at')
             ->limit($limit)
@@ -345,6 +346,21 @@ class TrafficAnalytics
         return $entries->each(function (PlateEvent $event) use ($onSitePlates): void {
             $event->setAttribute('on_site_now', $onSitePlates->has($event->plate_number));
         });
+    }
+
+    /**
+     * @deprecated Use recentDetections(). Kept for backwards compatibility;
+     * still returns entries only so any callers that assumed an entry log
+     * are not surprised.
+     *
+     * @return Collection<int, PlateEvent>
+     */
+    public function recentEntries(int $limit = 10): Collection
+    {
+        return $this->recentDetections($limit * 2)
+            ->filter(fn (PlateEvent $event) => $event->direction === PlateDirection::In)
+            ->take($limit)
+            ->values();
     }
 
     /**

@@ -233,24 +233,25 @@ it('counts hourly arrivals for one specific day', function () {
         ->and($yesterday[9]['count'])->toBe(1);
 });
 
-it('lists the last entry detections, showing a re-entry as its own row', function () {
-    $camera = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
+it('lists the last plate detections, entries and exits, showing a re-entry as its own row', function () {
+    $entrance = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
+    $exitCamera = \App\Models\Camera::factory()->for($this->site)->exit()->create();
 
     // Same plate seen entering twice, hours apart — the caller needs both
     // rows, not the visits-deduplicated view.
-    $first = \App\Models\PlateEvent::factory()->for($camera)->create([
+    $first = \App\Models\PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'FF98ZTGP',
         'direction' => \App\Enums\PlateDirection::In,
         'captured_at' => Date::now()->subHours(3),
     ]);
-    $second = \App\Models\PlateEvent::factory()->for($camera)->create([
+    $second = \App\Models\PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'FF98ZTGP',
         'direction' => \App\Enums\PlateDirection::In,
         'captured_at' => Date::now()->subMinutes(20),
     ]);
 
-    // Exits should be ignored — Latest activity is an entry log.
-    \App\Models\PlateEvent::factory()->for($camera)->create([
+    // Exits belong in Latest activity too — every detection is a row.
+    $exit = \App\Models\PlateEvent::factory()->for($exitCamera)->create([
         'plate_number' => 'GONE001',
         'direction' => \App\Enums\PlateDirection::Out,
         'captured_at' => Date::now()->subMinutes(5),
@@ -266,15 +267,38 @@ it('lists the last entry detections, showing a re-entry as its own row', functio
         'status' => VisitStatus::Open,
     ]);
 
-    $entries = $this->analytics->recentEntries();
+    $entries = $this->analytics->recentDetections();
 
-    expect($entries)->toHaveCount(2)
-        ->and($entries[0]->id)->toBe($second->id)
-        ->and($entries[0]->getAttribute('on_site_now'))->toBeTrue()
-        ->and($entries[1]->id)->toBe($first->id)
+    expect($entries)->toHaveCount(3)
+        ->and($entries[0]->id)->toBe($exit->id)
+        ->and($entries[0]->direction)->toBe(\App\Enums\PlateDirection::Out)
+        ->and($entries[1]->id)->toBe($second->id)
+        ->and($entries[1]->direction)->toBe(\App\Enums\PlateDirection::In)
+        ->and($entries[1]->getAttribute('on_site_now'))->toBeTrue()
+        ->and($entries[2]->id)->toBe($first->id)
         // FF98ZTGP has an open visit today, so both of its rows are flagged
         // "on site now" — the pill reflects the plate's current status.
-        ->and($entries[1]->getAttribute('on_site_now'))->toBeTrue();
+        ->and($entries[2]->getAttribute('on_site_now'))->toBeTrue();
+});
+
+it('keeps the deprecated recentEntries() returning entries only', function () {
+    $entrance = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
+
+    \App\Models\PlateEvent::factory()->for($entrance)->create([
+        'plate_number' => 'ENTRY01',
+        'direction' => \App\Enums\PlateDirection::In,
+        'captured_at' => Date::now()->subMinutes(30),
+    ]);
+    \App\Models\PlateEvent::factory()->for($entrance)->create([
+        'plate_number' => 'EXIT001',
+        'direction' => \App\Enums\PlateDirection::Out,
+        'captured_at' => Date::now()->subMinutes(5),
+    ]);
+
+    $entries = $this->analytics->recentEntries();
+
+    expect($entries)->toHaveCount(1)
+        ->and($entries[0]->plate_number)->toBe('ENTRY01');
 });
 
 it('counts currently on-site vehicles across every accessible site', function () {

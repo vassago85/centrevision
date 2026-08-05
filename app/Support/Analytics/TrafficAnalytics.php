@@ -4,7 +4,6 @@ namespace App\Support\Analytics;
 
 use App\Enums\PlateDirection;
 use App\Enums\PlateTagType;
-use App\Enums\VisitStatus;
 use App\Models\PlateEvent;
 use App\Models\PlateTag;
 use App\Models\Visit;
@@ -156,7 +155,6 @@ class TrafficAnalytics
 
         $counts = Visit::query()
             ->excludingRecurring()
-            ->when($this->hasExitTracking(), fn ($q) => $q->whereNot('status', VisitStatus::Orphaned))
             ->enteredBetween($start, $end)
             ->selectRaw('extract(hour from entered_at)::int as hour, count(*) as total')
             ->groupBy('hour')
@@ -467,19 +465,17 @@ class TrafficAnalytics
      */
     protected function baseQuery(DateRange $range): Builder
     {
-        $query = Visit::query()
+        // Orphaned visits are still real arrivals — the vehicle actually
+        // drove past the entrance camera. We used to strip them so live
+        // "currently on site" wouldn't be inflated by ghosts, but that also
+        // deleted them from historic arrival counts and every day older
+        // than "orphan_after_hours" would silently vanish overnight.
+        //
+        // Dwell-based queries call ->closed() on top of this, which already
+        // excludes Orphaned rows where excluding them is correct, so we can
+        // safely leave them in the base set.
+        return Visit::query()
             ->excludingRecurring()
             ->enteredBetween($range->from, $range->to);
-
-        // "Orphaned" means we opened a visit for an entry event and never saw
-        // the matching exit event. On a site that has exit cameras that is a
-        // data-quality issue and we drop it. On an entry-only site every
-        // visit will eventually be orphaned by design, and dropping them
-        // would wipe historic days off the dashboard — so we keep them.
-        if ($this->hasExitTracking()) {
-            $query->whereNot('status', VisitStatus::Orphaned);
-        }
-
-        return $query;
     }
 }

@@ -61,41 +61,41 @@ it('leaves staff-pattern plates out of every shopper figure', function () {
         ->and($this->analytics->repeatVisitorPercentage($this->range))->toBe(0.0);
 });
 
-it('ignores orphaned visits on sites that can measure exits', function () {
-    // With an exit camera in play, "orphaned" means we opened a visit for an
-    // entry but never saw the vehicle leave — a data-quality issue we do not
-    // want polluting the shopper figures.
-    \App\Models\Camera::factory()->exit()->create(['site_id' => $this->site->id]);
-
+it('counts orphaned visits as real arrivals so historic days keep showing up', function () {
+    // An "orphaned" visit is one where we saw the entry but never saw the
+    // matching exit — the vehicle really did arrive, we just do not know
+    // when it left. That still counts as a visit for arrival-based figures,
+    // no matter whether the site has an exit camera or not. If we dropped
+    // them, an entry-only site would lose every day older than 12 hours,
+    // and even exit-tracked sites would lose the odd stale row.
     visitAt($this->site, 'AA11GP', 2);
 
     Visit::factory()->for($this->site)->create([
+        'plate_number' => 'BB22GP',
         'entered_at' => Date::now()->subHours(3),
         'exited_at' => null,
         'dwell_minutes' => null,
         'status' => VisitStatus::Orphaned,
     ]);
 
-    expect($this->analytics->totalVisits($this->range))->toBe(1);
+    expect($this->analytics->totalVisits($this->range))->toBe(2);
 });
 
-it('counts orphaned visits on entry-only sites so yesterday still shows up', function () {
-    // No exit camera — every visit will eventually be marked orphaned by the
-    // MatchVisits job, but each of those still represents a real arrival
-    // that should show on the dashboard.
-    \App\Models\Camera::factory()->entrance()->create(['site_id' => $this->site->id]);
-
-    visitAt($this->site, 'AA11GP', 2);
+it('still excludes orphaned visits from dwell-based figures', function () {
+    // Dwell is a "closed visit" concept — a visit that was never closed has
+    // no honest dwell time, so it must not skew the average.
+    visitAt($this->site, 'AA11GP', 2, 30);
 
     Visit::factory()->for($this->site)->create([
         'plate_number' => 'BB22GP',
-        'entered_at' => Date::now()->subHours(20),
+        'entered_at' => Date::now()->subHours(3),
         'exited_at' => null,
         'dwell_minutes' => null,
         'status' => VisitStatus::Orphaned,
     ]);
 
-    expect($this->analytics->totalVisits($this->range))->toBe(2);
+    expect($this->analytics->dwellSummary($this->range))
+        ->toMatchArray(['average' => 30, 'median' => 30]);
 });
 
 it('reports average and median dwell over closed visits only', function () {

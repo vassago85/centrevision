@@ -454,7 +454,7 @@ new #[Title('Sub-accounts')] class extends Component {
          can eyeball what they'd pay next month. --}}
     @php $vf = $this->variableFeeSummary; @endphp
     <div class="mb-7 flex items-start gap-4 rounded-tf border border-accent/30 bg-accent-soft p-5 dark:bg-accent-soft/40">
-        <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-tf-sm">
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent dark:bg-accent-2 text-white shadow-tf-sm">
             <flux:icon icon="information-circle" class="size-5" />
         </span>
 

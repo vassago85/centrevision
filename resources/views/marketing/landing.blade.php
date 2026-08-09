@@ -241,7 +241,7 @@
                             'border-line bg-surface' => ! $recommended,
                         ])>
                             @if ($recommended)
-                                <span class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-white shadow-tf-sm">
+                                <span class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent dark:bg-accent-2 px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-white shadow-tf-sm">
                                     Recommended
                                 </span>
                             @endif
@@ -297,7 +297,7 @@
                     ] as $i => [$title, $icon, $body])
                         <li class="flex flex-col gap-4 rounded-2xl border border-line bg-page p-7 shadow-tf-sm">
                             <div class="flex items-center gap-3">
-                                <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-tf-sm">
+                                <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent dark:bg-accent-2 text-white shadow-tf-sm">
                                     <flux:icon :icon="$icon" class="size-5" />
                                 </span>
                                 <span class="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">

@@ -47,7 +47,7 @@
                 wire:navigate
                 @class([
                     'group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
-                    'bg-accent text-white shadow-tf-sm' => $isCurrent,
+                    'bg-accent dark:bg-accent-2 text-white shadow-tf-sm' => $isCurrent,
                     'text-ink-2 hover:bg-surface-2 hover:text-ink' => ! $isCurrent,
                 ])
             >
@@ -72,7 +72,7 @@
                 aria-label="{{ __('Account menu') }}"
                 data-test="user-menu-button"
             >
-                <span class="flex size-9 items-center justify-center rounded-full bg-accent text-[13px] font-semibold text-white">{{ $user->initials() }}</span>
+                <span class="flex size-9 items-center justify-center rounded-full bg-accent dark:bg-accent-2 text-[13px] font-semibold text-white">{{ $user->initials() }}</span>
                 <span class="min-w-0 flex-1">
                     <span class="block truncate text-[13.5px] font-semibold text-ink">{{ $user->name }}</span>
                     <span class="block truncate text-[11.5px] text-ink-muted">{{ $roleLabel }} · {{ $user->organization?->name ?? 'CentreVision' }}</span>

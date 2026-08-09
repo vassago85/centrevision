@@ -16,12 +16,22 @@
                         @php
                             $label = is_array($header) ? ($header['label'] ?? '') : $header;
                             $align = is_array($header) ? ($header['align'] ?? 'left') : 'left';
+                            // A blank label means "actions column" — swap in a
+                            // visually-hidden fallback so screen readers hear
+                            // "Actions" and axe's empty-table-header rule passes.
+                            $srOnly = $label === '' ? ($header['aria-label'] ?? 'Actions') : null;
                         @endphp
                         <th @class([
                             'border-b border-line py-2 font-semibold text-ink-2',
                             'text-left' => $align === 'left',
                             'text-right' => $align === 'right',
-                        ])>{{ $label }}</th>
+                        ])>
+                            @if ($srOnly !== null)
+                                <span class="sr-only">{{ $srOnly }}</span>
+                            @else
+                                {{ $label }}
+                            @endif
+                        </th>
                     @endforeach
                 </tr>
             </thead>

@@ -28,7 +28,10 @@
 
     --tf-ink: #0e1220;
     --tf-ink-2: #495064;
-    --tf-ink-muted: #7c8195;
+    /* WCAG AA on both white surface (5.8:1) and on the soft grey surface-2
+       (5.1:1). Kept just cool enough not to read as pure grey, so the
+       "muted" hierarchy against ink-2 is preserved. */
+    --tf-ink-muted: #5d6472;
 
     --tf-accent: #2563eb;
     --tf-accent-2: #1d4fd8;
@@ -40,7 +43,9 @@
     --tf-positive: #10b981;
     --tf-positive-soft: #dcfaee;
 
-    --tf-danger: #ef4444;
+    /* Darkened from #ef4444 so danger-soft pills (Unreachable, Blacklist
+       hits) pass 4.5:1 against the pink #fde7e7 background — was 3.18:1. */
+    --tf-danger: #b91c1c;
     --tf-danger-soft: #fde7e7;
 
     --tf-warning: #f59e0b;
@@ -60,10 +65,18 @@
 
     --tf-ink: #f5f6f8;
     --tf-ink-2: #b7bcc9;
-    --tf-ink-muted: #7c8195;
+    /* WCAG AA on both dark surfaces (5.0:1 vs #171b25, 4.6:1 vs #1e222d).
+       Old value #7c8195 sat at 4.45:1 and 4.1:1 respectively — legible
+       but a hair under AA on every muted label. */
+    --tf-ink-muted: #9095a5;
 
+    /* Kept bright: this is the colour for text/icons that sit ON
+       accent-soft (a dark navy in dark mode). Making it darker breaks
+       those readings. The `bg-accent + white` combos (nav pill,
+       avatar, primary buttons) instead lean on accent-2 in dark mode
+       via `dark:bg-accent-2` at their call sites. */
     --tf-accent: #4f8bef;
-    --tf-accent-2: #3e78dc;
+    --tf-accent-2: #1f5cc9;
     --tf-accent-soft: #142236;
 
     /* Brand navy is a fixed brand colour — it must not flip in dark mode,

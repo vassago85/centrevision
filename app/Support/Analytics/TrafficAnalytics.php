@@ -417,8 +417,11 @@ class TrafficAnalytics
 
         $delta = round((((float) $current - (float) $previous) / (float) $previous) * 100, 1);
 
+        // Pill only carries the arrow + magnitude; the "vs previous period"
+        // context lives in the adjacent caption on the KPI card, so we
+        // avoid saying "vs previous" twice on the same line.
         return [
-            'label' => sprintf('%s %s%% vs previous', $delta >= 0 ? '▲' : '▼', number_format(abs($delta), 1)),
+            'label' => sprintf('%s %s%%', $delta >= 0 ? '▲' : '▼', number_format(abs($delta), 1)),
             'tone' => $delta >= 0 ? 'up' : 'down',
         ];
     }

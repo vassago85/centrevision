@@ -658,7 +658,7 @@ new #[Title('Dashboard')] class extends Component
                         <th class="pb-2 font-semibold">Camera</th>
                         <th class="pb-2 font-semibold">Direction</th>
                         <th class="pb-2 text-right font-semibold">
-                            {{ $this->hasExitTracking ? 'Status' : 'Confidence' }}
+                            {{ $this->hasExitTracking ? 'Currently' : 'Confidence' }}
                         </th>
                     </tr>
                 </thead>
@@ -687,10 +687,17 @@ new #[Title('Dashboard')] class extends Component
                             </td>
                             <td class="py-2 text-right">
                                 @if ($this->hasExitTracking)
+                                    {{-- "Currently" is a plate-level flag: is this vehicle
+                                         still on the premises right now? For an OUT event
+                                         it will almost always be false (they just left).
+                                         For an IN event that's still open it will be true.
+                                         We show the pill only when true — the em-dash for
+                                         false keeps the column quiet on rows where the
+                                         answer is "not right now, and that's expected". --}}
                                     @if ($entry->getAttribute('on_site_now'))
                                         <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
                                     @else
-                                        <span class="text-[11.5px] text-ink-muted">Departed</span>
+                                        <span class="text-[11.5px] text-ink-muted">—</span>
                                     @endif
                                 @else
                                     @php $conf = $entry->confidence === null ? null : (int) round($entry->confidence * 100); @endphp

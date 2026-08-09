@@ -31,13 +31,30 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
 
     // Support the single-series shorthand (`values: [...]`) and the grouped
     // multi-series form (`series: [{label, values, color}, ...]`).
+    //
+    // For grouped charts we detect the "scale mismatch" case — when one
+    // series is at least four times larger than the first (usually the
+    // "current period" vs a "previous period" that was much busier). In
+    // that case we pin each series to its own Y-axis so a quiet current
+    // period stays legible instead of collapsing to zero-height bars.
+    const maxOf = (arr) => arr.reduce((m, v) => (v > m ? v : m), 0);
+    const useDualAxis = (() => {
+        if (!series || series.length < 2) return false;
+        const primary = maxOf(series[0].values ?? []);
+        return series.slice(1).some((s) => {
+            const other = maxOf(s.values ?? []);
+            return primary > 0 ? other >= primary * 4 : other > 0;
+        });
+    })();
+
     const datasets = (series && series.length)
-        ? series.map((s) => ({
+        ? series.map((s, index) => ({
               label: s.label,
               data: s.values,
               backgroundColor: colors[s.color] ?? s.color ?? colors.accent,
               borderRadius: 4,
               maxBarThickness,
+              yAxisID: useDualAxis ? (index === 0 ? 'y' : 'y1') : 'y',
           }))
         : [
               {
@@ -91,6 +108,19 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
                     ticks: { color: colors.muted, font: { size: 11 } },
                     beginAtZero: true,
                 },
+                // Right-hand scale for the "previous period" bars when the
+                // two series live on wildly different orders of magnitude.
+                // Kept in-sync visually with the left axis (same grid off,
+                // same font) so the dashboard doesn't feel like two charts
+                // pretending to be one.
+                ...(useDualAxis ? {
+                    y1: {
+                        position: 'right',
+                        grid: { display: false },
+                        ticks: { color: colors.muted, font: { size: 11 } },
+                        beginAtZero: true,
+                    },
+                } : {}),
             },
         },
     };

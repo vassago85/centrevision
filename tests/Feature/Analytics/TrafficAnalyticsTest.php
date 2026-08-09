@@ -301,6 +301,23 @@ it('keeps the deprecated recentEntries() returning entries only', function () {
         ->and($entries[0]->plate_number)->toBe('ENTRY01');
 });
 
+it('formats period comparison pills without duplicating "vs previous"', function () {
+    // The KPI card already carries "vs previous period" as a caption; the
+    // pill only needs the direction arrow and the magnitude so we do not
+    // repeat "vs previous" twice on the same line.
+    expect($this->analytics->comparison(120, 100))
+        ->toMatchArray(['label' => '▲ 20.0%', 'tone' => 'up']);
+
+    expect($this->analytics->comparison(80, 100))
+        ->toMatchArray(['label' => '▼ 20.0%', 'tone' => 'down']);
+
+    expect($this->analytics->comparison(50, null))
+        ->toMatchArray(['label' => 'No prior data', 'tone' => 'muted']);
+
+    expect($this->analytics->comparison(50, 0))
+        ->toMatchArray(['label' => 'No prior data', 'tone' => 'muted']);
+});
+
 it('counts currently on-site vehicles across every accessible site', function () {
     // One open visit, one closed. Only the open one should be counted.
     Visit::factory()->for($this->site)->create([

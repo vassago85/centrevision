@@ -13,6 +13,11 @@
     // chart's data actually changes. Without a name we fall back to the old
     // wire:ignore behaviour so unnamed charts on non-polled pages stay put.
     'name' => null,
+    // Per-label context appended to the tooltip. Shape:
+    //   ['Aug 8' => ['Public holiday: Women's Day', 'Rain'], ...]
+    // Keys match the entries in `labels`. Empty by default, so existing
+    // callers get no new tooltip lines and no behaviour change.
+    'annotations' => [],
 ])
 
 @php
@@ -26,6 +31,7 @@
         'color' => $color,
         'maxBarThickness' => $maxBarThickness,
         'showLegend' => $showLegend,
+        'annotations' => (object) $annotations,
     ];
 @endphp
 

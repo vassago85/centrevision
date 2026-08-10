@@ -25,11 +25,23 @@ new #[Title('Sites')] class extends Component
 
     public string $address = '';
 
+    /**
+     * GPS coordinates. Optional in v1 — a site without them still works
+     * everywhere; the weather/holiday chart markers just don't appear until
+     * they are set. Strings on the form so an empty field is easy to detect;
+     * they're cast when saved.
+     */
+    public string $latitude = '';
+
+    public string $longitude = '';
+
     protected function rules(): array
     {
         return [
             'name' => ['required', 'string', 'max:120'],
             'address' => ['nullable', 'string', 'max:255'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ];
     }
 
@@ -70,7 +82,7 @@ new #[Title('Sites')] class extends Component
     {
         $this->authorize('create', Site::class);
 
-        $this->reset(['editingId', 'name', 'address']);
+        $this->reset(['editingId', 'name', 'address', 'latitude', 'longitude']);
         $this->resetValidation();
         $this->showForm = true;
     }
@@ -84,6 +96,8 @@ new #[Title('Sites')] class extends Component
         $this->editingId = $site->getKey();
         $this->name = $site->name;
         $this->address = (string) $site->address;
+        $this->latitude = $site->latitude === null ? '' : (string) $site->latitude;
+        $this->longitude = $site->longitude === null ? '' : (string) $site->longitude;
         $this->showForm = true;
     }
 
@@ -103,6 +117,13 @@ new #[Title('Sites')] class extends Component
                 'organization_id' => $owner->getKey(),
                 'name' => trim($this->name),
                 'address' => trim($this->address) ?: null,
+                'latitude' => $this->latitude === '' ? null : (float) $this->latitude,
+                'longitude' => $this->longitude === '' ? null : (float) $this->longitude,
+                // v1 is ZA-first — every new site defaults to South Africa
+                // so weather/holiday enrichment "just works" without asking
+                // the owner to fill in extra fields.
+                'country_code' => 'ZA',
+                'timezone' => 'Africa/Johannesburg',
             ]);
 
             // Attach a default (metered, Active) subscription so billing has
@@ -122,6 +143,8 @@ new #[Title('Sites')] class extends Component
             $site->update([
                 'name' => trim($this->name),
                 'address' => trim($this->address) ?: null,
+                'latitude' => $this->latitude === '' ? null : (float) $this->latitude,
+                'longitude' => $this->longitude === '' ? null : (float) $this->longitude,
             ]);
 
             app(Tenancy::class)->refreshSites();
@@ -340,6 +363,25 @@ new #[Title('Sites')] class extends Component
                 label="Address (optional)"
                 placeholder="14 Atterbury Rd, Pretoria"
             />
+
+            {{-- Coordinates unlock the weather + holiday markers on the daily
+                 chart. They're optional: a site without them still shows every
+                 KPI, just no weather overlay. Copy/paste from Google Maps is
+                 the intended workflow — good enough for mall-scale precision. --}}
+            <div class="grid gap-3 sm:grid-cols-2">
+                <flux:input
+                    wire:model="latitude"
+                    label="Latitude (optional)"
+                    placeholder="-25.7847"
+                    inputmode="decimal"
+                />
+                <flux:input
+                    wire:model="longitude"
+                    label="Longitude (optional)"
+                    placeholder="28.2769"
+                    inputmode="decimal"
+                />
+            </div>
 
             @if (! $editingId)
                 <div class="rounded-tf border border-line bg-surface-2 p-3 text-[12px] text-ink-2">

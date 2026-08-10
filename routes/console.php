@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\EnrichSiteDayStats;
 use App\Jobs\GenerateMonthlyInvoices;
 use App\Jobs\GeneratePartnerPayouts;
 use App\Jobs\MatchVisits;
@@ -27,6 +28,11 @@ Schedule::job(new TagRecurringPlates)->dailyAt('02:15');
 
 // POPIA retention.
 Schedule::job(new PrunePlateData)->dailyAt('03:30');
+
+// Enrichment: aggregate yesterday's visits + weather + holiday flags into
+// the plate-free `site_day_stats` rollup. Runs after MatchVisits has settled
+// and PrunePlateData has finished, and before the morning report send.
+Schedule::job(new EnrichSiteDayStats)->dailyAt('04:45')->withoutOverlapping();
 
 // Each site decides for itself whether a report is due today.
 Schedule::job(new SendScheduledReports)->dailyAt(sprintf('%02d:00', config('trafficflow.report_send_hour')));

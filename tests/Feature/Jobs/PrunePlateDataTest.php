@@ -4,6 +4,7 @@ use App\Jobs\PrunePlateData;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Site;
+use App\Models\SiteDayStat;
 use App\Models\Visit;
 
 beforeEach(function () {
@@ -104,4 +105,19 @@ it('deletes in batches without missing rows', function () {
     PrunePlateData::dispatchSync();
 
     expect(Visit::query()->count())->toBe(0);
+});
+
+it('leaves site_day_stats rollups alone even when they predate retention', function () {
+    // The rollup is deliberately plate-free so it can outlive POPIA pruning.
+    // If this test ever fails, we've grown a plate column or accidentally
+    // hooked the prune job into the wrong table — either is a regression.
+    $this->site->update(['settings' => ['retention_days' => 30]]);
+
+    SiteDayStat::factory()->for($this->site)->create([
+        'local_date' => now()->subDays(400)->toDateString(),
+    ]);
+
+    PrunePlateData::dispatchSync();
+
+    expect(SiteDayStat::query()->count())->toBe(1);
 });

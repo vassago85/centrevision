@@ -26,11 +26,20 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int $organization_id
  * @property string $name
  * @property string|null $address
+ * @property float|null $latitude
+ * @property float|null $longitude
+ * @property string|null $country_code
+ * @property string|null $timezone
+ * @property string|null $province_code
  * @property array<string, mixed>|null $settings
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
  */
-#[Fillable(['organization_id', 'name', 'address', 'settings'])]
+#[Fillable([
+    'organization_id', 'name', 'address',
+    'latitude', 'longitude', 'country_code', 'timezone', 'province_code',
+    'settings',
+])]
 #[ScopedBy(SiteScope::class)]
 #[UsePolicy(SitePolicy::class)]
 class Site extends Model implements SiteScoped
@@ -57,7 +66,50 @@ class Site extends Model implements SiteScoped
     {
         return [
             'settings' => 'array',
+            'latitude' => 'float',
+            'longitude' => 'float',
         ];
+    }
+
+    /**
+     * True when the site has coordinates precise enough for a weather lookup.
+     * The enrichment job skips (silently, without error) sites that return
+     * false here, so the UI shows no weather markers for them but nothing
+     * breaks either.
+     */
+    public function hasCoordinates(): bool
+    {
+        return $this->latitude !== null && $this->longitude !== null;
+    }
+
+    /**
+     * The IANA timezone used to align "one day" with local reality. Falls
+     * back to Africa/Johannesburg for ZA sites (or when country is unset —
+     * v1 ships ZA-only), then to the platform's configured timezone as a
+     * last resort so `->localDate()` and friends always return something
+     * sensible.
+     */
+    public function resolvedTimezone(): string
+    {
+        if (! empty($this->timezone)) {
+            return $this->timezone;
+        }
+
+        if ($this->country_code === null || $this->country_code === 'ZA') {
+            return 'Africa/Johannesburg';
+        }
+
+        return (string) config('app.timezone', 'UTC');
+    }
+
+    /**
+     * ISO-3166 country used to pick a calendar. Defaults to ZA because that
+     * is the only calendar bundled today; keeping the fallback in one place
+     * avoids scattering "ZA-first" assumptions across the enrichment code.
+     */
+    public function resolvedCountryCode(): string
+    {
+        return $this->country_code ?: 'ZA';
     }
 
     /**

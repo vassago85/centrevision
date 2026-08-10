@@ -6,6 +6,7 @@ use App\Models\Scopes\SiteScope;
 use App\Models\Visit;
 use App\Models\WatchlistPlate;
 use App\Support\Analytics\DateRange;
+use App\Support\Analytics\DayContextAnalytics;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\TrafficAnalytics;
 use App\Support\Tenancy;
@@ -19,6 +20,15 @@ new #[Title('Dashboard')] class extends Component
 {
     #[Url(as: 'range', keep: true)]
     public string $rangeKey = '7d';
+
+    /**
+     * When true, public-holiday days are dropped from the "Visits Over Time"
+     * chart so a run of holidays doesn't make an otherwise ordinary week
+     * look thin. Off by default so every headline number the dashboard has
+     * ever reported stays exactly the same until the owner opts in.
+     */
+    #[Url(as: 'exclude_holidays', keep: true)]
+    public bool $excludeHolidays = false;
 
     /**
      * Platform admins have no site of their own to show, so send them to the
@@ -227,7 +237,17 @@ new #[Title('Dashboard')] class extends Component
      * Visits per day for the current and preceding window, side by side. Two
      * short arrays so the grouped bar chart can just pluck them straight.
      *
-     * @return array{labels: array<int, string>, current: array<int, int>, previous: array<int, int>}
+     * Also exposes the ISO date for each label so the caller can join to
+     * day-context data (weather/holiday markers) without re-deriving dates
+     * from the "j M" chart labels — which would otherwise break at year
+     * boundaries on 90-day ranges.
+     *
+     * When the excludeHolidays toggle is on, public-holiday days are dropped
+     * from *both* series before they reach the chart. Nothing else on the
+     * dashboard is affected — KPIs still count every day, so the toggle
+     * changes what you see on this one chart and nowhere else.
+     *
+     * @return array{labels: array<int, string>, dates: array<int, string>, current: array<int, int>, previous: array<int, int>}
      */
     #[Computed]
     public function visitsOverTime(): array
@@ -235,14 +255,133 @@ new #[Title('Dashboard')] class extends Component
         $current = $this->analytics->visitsByDay($this->range);
         $previous = $this->analytics->visitsByDay($this->range->previous());
 
+        // Line up the previous-window slot with today's slot before any
+        // filtering happens, so a dropped day removes *both* bars in the
+        // grouped chart and the remaining bars stay paired.
+        $paired = $current->values()->map(function (array $day, int $index) use ($previous): array {
+            return [
+                ...$day,
+                'previous' => (int) ($previous[$index]['count'] ?? 0),
+            ];
+        });
+
+        if ($this->excludeHolidays) {
+            $holidayDates = array_flip(
+                app(DayContextAnalytics::class)->publicHolidayDates($this->range),
+            );
+
+            $paired = $paired
+                ->reject(fn (array $day) => isset($holidayDates[$day['date']]))
+                ->values();
+        }
+
         return [
-            'labels' => $current->pluck('label')->all(),
-            'current' => $current->pluck('count')->all(),
-            // Pad or trim the previous window to line up bar-for-bar. Ranges
-            // are always equal length, so this loop is a formality against
-            // future changes to DateRange::previous().
-            'previous' => $previous->take($current->count())->pluck('count')->all(),
+            'labels' => $paired->pluck('label')->all(),
+            'dates' => $paired->pluck('date')->all(),
+            'current' => $paired->pluck('count')->all(),
+            'previous' => $paired->pluck('previous')->all(),
         ];
+    }
+
+    /**
+     * Weather + holiday context for each day in the current range, keyed by
+     * ISO date. Empty collection if the site hasn't been enriched yet — the
+     * dashboard treats "no context" as "no markers", never an error.
+     *
+     * @return \Illuminate\Support\Collection<string, array<string, mixed>>
+     */
+    #[Computed]
+    public function dayContext(): Collection
+    {
+        return app(DayContextAnalytics::class)->forRange($this->range);
+    }
+
+    /**
+     * Extra tooltip lines for the daily chart, keyed by the chart's own
+     * "j M" label. Callers pass this straight to <x-chart annotations>.
+     *
+     * @return array<string, array<int, string>>
+     */
+    #[Computed]
+    public function dayAnnotations(): array
+    {
+        $labels = $this->visitsOverTime['labels'];
+        $dates = $this->visitsOverTime['dates'];
+        $context = $this->dayContext;
+
+        $out = [];
+
+        foreach ($dates as $index => $iso) {
+            $ctx = $context->get($iso);
+
+            if ($ctx === null) {
+                continue;
+            }
+
+            $lines = [];
+
+            if ($ctx['is_public_holiday']) {
+                $lines[] = 'Public holiday'.($ctx['holiday_name'] ? ': '.$ctx['holiday_name'] : '');
+            }
+
+            if ($ctx['is_school_holiday']) {
+                $lines[] = 'School holiday';
+            }
+
+            if ($ctx['weather_label'] !== null && $ctx['weather_label'] !== 'Clear') {
+                // Only surface notable weather (rain/thunderstorm/fog etc.)
+                // — a "Clear" tag on every summer day would just be noise.
+                $temp = $ctx['temp_avg_c'] === null ? '' : ' · '.round((float) $ctx['temp_avg_c']).'°C';
+                $lines[] = 'Weather: '.$ctx['weather_label'].$temp;
+            }
+
+            if ($lines !== []) {
+                $out[$labels[$index]] = $lines;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Compact list of "why did that day look different" chips rendered under
+     * the visits-over-time chart. Only days that carry a holiday flag or
+     * notable weather show up — a chip strip that lists every day is noise.
+     *
+     * @return array<int, array{label: string, kind: string, text: string}>
+     */
+    #[Computed]
+    public function notableDays(): array
+    {
+        $chips = [];
+
+        foreach ($this->visitsOverTime['dates'] as $index => $iso) {
+            $ctx = $this->dayContext->get($iso);
+
+            if ($ctx === null) {
+                continue;
+            }
+
+            $label = $this->visitsOverTime['labels'][$index];
+
+            if ($ctx['is_public_holiday']) {
+                $chips[] = [
+                    'label' => $label,
+                    'kind' => 'holiday',
+                    'text' => $ctx['holiday_name'] ?? 'Public holiday',
+                ];
+            }
+
+            if ($ctx['weather_label'] !== null && in_array($ctx['weather_label'], ['Rain', 'Thunderstorm', 'Snow'], true)) {
+                $chips[] = [
+                    'label' => $label,
+                    'kind' => 'weather',
+                    'text' => $ctx['weather_label'],
+                ];
+            }
+        }
+
+        return $chips;
     }
 
     /**
@@ -479,9 +618,27 @@ new #[Title('Dashboard')] class extends Component
             <x-slot:header>
                 <div>
                     <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits Over Time</p>
-                    <p class="mt-1 text-sm text-ink-2">Current period vs. the previous</p>
+                    <p class="mt-1 text-sm text-ink-2">
+                        Current period vs. the previous
+                        @if ($this->excludeHolidays)
+                            <span class="text-ink-muted">· holidays hidden</span>
+                        @endif
+                    </p>
                 </div>
-                <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">Daily</span>
+                <div class="flex items-center gap-2">
+                    {{-- Opt-in filter. Off by default so headline KPIs and
+                         chart bars are never quietly changed under the user;
+                         the toggle only rearranges this one chart. --}}
+                    <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
+                        <input
+                            type="checkbox"
+                            wire:model.live="excludeHolidays"
+                            class="size-3 rounded border-line text-accent focus:ring-accent"
+                        />
+                        <span>Exclude holidays</span>
+                    </label>
+                    <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">Daily</span>
+                </div>
             </x-slot:header>
 
             <x-chart
@@ -491,10 +648,35 @@ new #[Title('Dashboard')] class extends Component
                     ['label' => 'This period', 'values' => $this->visitsOverTime['current'], 'color' => 'accent'],
                     ['label' => 'Previous', 'values' => $this->visitsOverTime['previous'], 'color' => 'accentSoft'],
                 ]"
+                :annotations="$this->dayAnnotations"
                 :show-legend="true"
                 :height="220"
                 aria-label="Grouped bar chart comparing daily visits this period to the previous period"
             />
+
+            {{-- Notable-days strip: only appears when we have context for
+                 something worth calling out (public holiday or wet weather).
+                 A dashboard with a rainy Saturday explains itself; on a run
+                 of unremarkable days the strip stays out of the way. --}}
+            @if (! empty($this->notableDays))
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                    @foreach ($this->notableDays as $chip)
+                        <span @class([
+                            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                            'bg-warning-soft text-warning' => $chip['kind'] === 'holiday',
+                            'bg-accent-soft text-accent' => $chip['kind'] === 'weather',
+                        ])>
+                            <flux:icon
+                                :icon="$chip['kind'] === 'holiday' ? 'calendar-days' : 'cloud'"
+                                class="size-3"
+                            />
+                            <span class="tabular-nums font-semibold">{{ $chip['label'] }}</span>
+                            <span>·</span>
+                            <span>{{ $chip['text'] }}</span>
+                        </span>
+                    @endforeach
+                </div>
+            @endif
         </x-panel-card>
 
         <x-panel-card>

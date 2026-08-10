@@ -9,6 +9,7 @@ use App\Models\PlateEvent;
 use App\Models\PlateTag;
 use App\Models\ShopSubscription;
 use App\Models\Site;
+use App\Models\SiteDayStat;
 use App\Models\User;
 use App\Models\Visit;
 use App\Models\WatchlistPlate;
@@ -334,4 +335,67 @@ it('picks up a fresh plate event on the next poll without a remount', function (
     // Livewire's timer.
     $component->call('$refresh')
         ->assertSeeHtml('NEW 999 GP');
+});
+
+it('surfaces public-holiday context in the visits-over-time chart annotations', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Pin a day inside the default 7d window to a known holiday, then
+    // seed a matching site_day_stats row — the enrichment job would
+    // normally do this, but we short-circuit it for the test.
+    $holiday = Date::now()->subDays(2)->startOfDay();
+
+    SiteDayStat::factory()->for($this->site)->publicHoliday("Women's Day")->create([
+        'local_date' => $holiday->toDateString(),
+    ]);
+
+    $component = Livewire::test('pages::overview')->assertSet('rangeKey', '7d');
+
+    // The chip strip is the visible surface for the marker; the tooltip
+    // annotation is baked into the chart payload and is what actually
+    // renders on hover in the browser.
+    $component->assertSee("Women's Day");
+
+    $annotations = $component->instance()->dayAnnotations;
+    expect($annotations)->not->toBeEmpty();
+    expect(array_values($annotations)[0])->toContain("Public holiday: Women's Day");
+});
+
+it('drops public-holiday days from the daily chart when the toggle is on', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Two days inside the default 7d window: one plain, one holiday.
+    // Seed matching day stats so the toggle actually has something to
+    // filter against.
+    $plain = Date::now()->subDays(1)->startOfDay();
+    $holiday = Date::now()->subDays(2)->startOfDay();
+
+    SiteDayStat::factory()->for($this->site)->create([
+        'local_date' => $plain->toDateString(),
+    ]);
+    SiteDayStat::factory()->for($this->site)->publicHoliday('Freedom Day')->create([
+        'local_date' => $holiday->toDateString(),
+    ]);
+
+    $component = Livewire::test('pages::overview')->assertSet('excludeHolidays', false);
+
+    $labelsBefore = $component->instance()->visitsOverTime['labels'];
+    expect($labelsBefore)->toContain($holiday->format('j M'));
+
+    $component->set('excludeHolidays', true);
+
+    $labelsAfter = $component->instance()->visitsOverTime['labels'];
+    expect($labelsAfter)
+        ->not->toContain($holiday->format('j M'))
+        ->and($labelsAfter)->toContain($plain->format('j M'));
+});
+
+it('keeps the excludeHolidays toggle off by default so existing views are unchanged', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::test('pages::overview')
+        ->assertSet('excludeHolidays', false)
+        // Copy that only appears when the filter is on — makes sure the
+        // header caption isn't lying about the default state.
+        ->assertDontSee('holidays hidden');
 });

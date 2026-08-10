@@ -20,8 +20,27 @@ class SiteFactory extends Factory
             'organization_id' => Organization::factory()->owner(),
             'name' => fake()->streetName().' Mall',
             'address' => fake()->streetAddress().', '.fake()->city(),
+            // Default new sites to Pretoria so weather/holiday enrichment
+            // tests have coordinates + a South African calendar to work with
+            // without every test having to set them explicitly.
+            'latitude' => -25.7479,
+            'longitude' => 28.2293,
+            'country_code' => 'ZA',
+            'timezone' => 'Africa/Johannesburg',
             'settings' => null,
         ];
+    }
+
+    /**
+     * Drop the default coordinates — useful for tests that need to exercise
+     * the "no location" fallback path (no weather markers, no errors).
+     */
+    public function withoutCoordinates(): static
+    {
+        return $this->state(fn () => [
+            'latitude' => null,
+            'longitude' => null,
+        ]);
     }
 
     public function for_(Organization $organization): static

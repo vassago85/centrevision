@@ -25,8 +25,13 @@ function themeColors() {
  * Bar chart configuration. Accepts either a single `values` array (rendered as
  * one series) or a `series` array of `{label, values, color}` objects for a
  * grouped bar chart.
+ *
+ * `annotations` is an optional map keyed by x-axis label; each value is a list
+ * of short strings appended to that bar's tooltip. Used by the dashboard to
+ * surface holiday / weather context on the daily chart without adding another
+ * bar series that would change the scale.
  */
-function barChartConfig({ labels, values, series, color, maxBarThickness, showLegend }) {
+function barChartConfig({ labels, values, series, color, maxBarThickness, showLegend, annotations }) {
     const colors = themeColors();
 
     // Support the single-series shorthand (`values: [...]`) and the grouped
@@ -96,6 +101,18 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
                 tooltip: {
                     displayColors: false,
                     padding: 8,
+                    callbacks: {
+                        // Append weather + holiday context to the tooltip if
+                        // the caller supplied any for this bar's label. Keeps
+                        // the chart itself unchanged (same bars, same scale)
+                        // while explaining outliers on hover.
+                        afterBody: (items) => {
+                            if (!annotations || items.length === 0) return [];
+                            const label = items[0].label;
+                            const extras = annotations[label];
+                            return Array.isArray(extras) ? extras : [];
+                        },
+                    },
                 },
             },
             scales: {
@@ -193,6 +210,7 @@ document.addEventListener('alpine:init', () => {
                         color: config.color ?? 'accent',
                         maxBarThickness: config.maxBarThickness ?? 20,
                         showLegend: config.showLegend ?? false,
+                        annotations: config.annotations ?? {},
                     })
                 );
             } catch (error) {

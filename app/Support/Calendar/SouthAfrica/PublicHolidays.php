@@ -104,20 +104,40 @@ class PublicHolidays
     }
 
     /**
-     * PHP's `easter_days()` returns the integer offset from March 21 in the
-     * given year, which sidesteps every timezone concern that plagues its
-     * `easter_date()` cousin (that one hands back a Unix timestamp in the
-     * default timezone and is fun to reason about across systems).
+     * Easter Sunday in the Gregorian calendar, computed by the Meeus /
+     * Jones / Butcher algorithm.
+     *
+     * Deliberately pure PHP: PHP's built-in `easter_days()` lives in the
+     * `calendar` extension, which the production Docker image does not
+     * ship. Doing the arithmetic here means the enrichment job never
+     * depends on a php.ini toggle to compute a holiday.
+     *
+     * Correct for any Gregorian year >= 1583.
      */
     private static function easter(int $year): CarbonImmutable
     {
-        // easter_days handles the range we care about (roughly 4 CE and up),
-        // but guard against silly inputs anyway.
         if ($year < 1583) {
+            // Julian Easter needs a different formula; the app never has to
+            // ask about it. Fall back to a safe non-holiday sentinel so any
+            // accidental call doesn't crash.
             return CarbonImmutable::createFromDate($year, 4, 12);
         }
 
-        return CarbonImmutable::createFromDate($year, 3, 21)
-            ->addDays(easter_days($year));
+        $a = $year % 19;
+        $b = intdiv($year, 100);
+        $c = $year % 100;
+        $d = intdiv($b, 4);
+        $e = $b % 4;
+        $f = intdiv($b + 8, 25);
+        $g = intdiv($b - $f + 1, 3);
+        $h = (19 * $a + $b - $d - $g + 15) % 30;
+        $i = intdiv($c, 4);
+        $k = $c % 4;
+        $l = (32 + 2 * $e + 2 * $i - $h - $k) % 7;
+        $m = intdiv($a + 11 * $h + 22 * $l, 451);
+        $month = intdiv($h + $l - 7 * $m + 114, 31);
+        $day = (($h + $l - 7 * $m + 114) % 31) + 1;
+
+        return CarbonImmutable::createFromDate($year, $month, $day);
     }
 }

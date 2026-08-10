@@ -59,13 +59,16 @@ return [
     | Application Timezone
     |--------------------------------------------------------------------------
     |
-    | Here you may specify the default timezone for your application, which
-    | will be used by the PHP date and date-time functions. The timezone
-    | is set to "UTC" by default as it is suitable for most use cases.
+    | This drives Laravel's boot-time `date_default_timezone_set()`, so it
+    | governs every `now()`, `Carbon` instance and datetime cast in the
+    | app. Sourced from APP_TIMEZONE (default Africa/Johannesburg) because
+    | CentreVision is ZA-first — the docker/php.ini and .env.example both
+    | already reflect this. Leaving it hard-coded to UTC caused every
+    | timestamp on the dashboard to render two hours behind local time.
     |
     */
 
-    'timezone' => 'UTC',
+    'timezone' => env('APP_TIMEZONE', 'Africa/Johannesburg'),
 
     /*
     |--------------------------------------------------------------------------

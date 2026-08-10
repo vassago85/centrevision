@@ -68,6 +68,23 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * How often the dashboard re-fetches itself. Today's numbers move minute
+     * by minute so they warrant a tight cadence; ninety-day aggregates barely
+     * shift between polls so a slower interval keeps the database sane. The
+     * browser suspends wire:poll automatically when the tab is backgrounded,
+     * so an idle dashboard costs nothing.
+     */
+    #[Computed]
+    public function pollInterval(): string
+    {
+        return match ($this->rangeKey) {
+            'today' => '15s',
+            '7d' => '30s',
+            default => '60s',
+        };
+    }
+
+    /**
      * True when the tenant's currently-viewed sites include at least one
      * exit-capable camera. When false the dashboard is honest about the
      * data it does not have — dwell and "currently on site" become
@@ -229,6 +246,25 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * Hour-of-day arrivals for the "Visits by Time of Day" chart, pre-plucked
+     * into the two arrays the chart component wants. Memoised so the poll
+     * loop doesn't run the same GROUP BY twice per render (once for labels,
+     * once for values).
+     *
+     * @return array{labels: array<int, string>, values: array<int, int>}
+     */
+    #[Computed]
+    public function visitsByHour(): array
+    {
+        $rows = $this->analytics->visitsByHour($this->range);
+
+        return [
+            'labels' => $rows->pluck('label')->all(),
+            'values' => $rows->pluck('count')->all(),
+        ];
+    }
+
+    /**
      * Watchlist- and security-related counts for the alert card. Grouped so
      * the shell can drive the notification bell off the same numbers.
      *
@@ -371,17 +407,19 @@ new #[Title('Dashboard')] class extends Component
     }
 }; ?>
 
-<div @if ($this->isToday) wire:poll.60s @endif>
+<div wire:poll.{{ $this->pollInterval }}>
     {{-- Header — the mockup's page title + range picker + bell. Shops don't
          see the notification bell because it would only ever link to alerts
-         they aren't allowed to view. Today mode polls every minute so the
-         "currently on site" counter and hourly bars stay live without a
+         they aren't allowed to view. The whole dashboard re-fetches on a
+         cadence tuned to the range (see pollInterval) so KPIs, charts,
+         alerts and the latest-activity table all stay live without a
          manual refresh. --}}
     <x-dashboard-header
         :title="$this->heading"
         :subtitle="'Vehicle traffic · '.strtolower($this->range->label)"
         :alert-count="$this->canSeeSecurity ? $this->alertCounts['total'] : 0"
         :show-bell="$this->canSeeSecurity"
+        live
     >
         <x-slot:actions>
             <flux:select wire:model.live="rangeKey" size="sm" class="min-w-44" icon="calendar" label="Period" label:sr-only>
@@ -423,6 +461,7 @@ new #[Title('Dashboard')] class extends Component
             </x-slot:header>
 
             <x-chart
+                name="hourly-today"
                 :labels="$this->hourlyTodayVsYesterday['labels']"
                 :series="[
                     ['label' => 'Today', 'values' => $this->hourlyTodayVsYesterday['today'], 'color' => 'accent'],
@@ -446,6 +485,7 @@ new #[Title('Dashboard')] class extends Component
             </x-slot:header>
 
             <x-chart
+                name="visits-over-time"
                 :labels="$this->visitsOverTime['labels']"
                 :series="[
                     ['label' => 'This period', 'values' => $this->visitsOverTime['current'], 'color' => 'accent'],
@@ -467,8 +507,9 @@ new #[Title('Dashboard')] class extends Component
             </x-slot:header>
 
             <x-chart
-                :labels="$this->analytics->visitsByHour($this->range)->pluck('label')->all()"
-                :values="$this->analytics->visitsByHour($this->range)->pluck('count')->all()"
+                name="visits-by-hour"
+                :labels="$this->visitsByHour['labels']"
+                :values="$this->visitsByHour['values']"
                 :height="220"
                 aria-label="Bar chart of arrivals by hour of day"
             />

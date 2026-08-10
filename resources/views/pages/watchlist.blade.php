@@ -156,7 +156,9 @@ new #[Title('Watchlist')] class extends Component
     }
 }; ?>
 
-<div wire:poll.60s>
+{{-- 30s cadence matches the dashboard's alertCounts refresh so the bell and
+     this page never disagree by more than one poll cycle. --}}
+<div wire:poll.30s>
     <x-page-header title="Watchlist" subtitle="Plates you want to hear about the moment they arrive.">
         <x-slot:actions>
             <flux:button size="sm" variant="primary" wire:click="$set('showForm', true)">Add plate</flux:button>

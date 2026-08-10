@@ -290,3 +290,48 @@ it('narrows the heading and figures to the selected site', function () {
         ->assertSee('MBWATCH1')
         ->assertDontSee('HIT 001 GP');
 });
+
+it('polls on every range so the dashboard stays live without manual refresh', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Cadence is tuned to how fast the underlying numbers can plausibly
+    // change — Today's counters move minute by minute, 90-day aggregates
+    // barely move between polls.
+    $expected = [
+        'today' => 'wire:poll.15s',
+        '7d' => 'wire:poll.30s',
+        '30d' => 'wire:poll.60s',
+        '90d' => 'wire:poll.60s',
+    ];
+
+    foreach ($expected as $range => $directive) {
+        Livewire::withQueryParams(['range' => $range])
+            ->test('pages::overview')
+            ->assertSet('rangeKey', $range)
+            ->assertSeeHtml($directive);
+    }
+});
+
+it('picks up a fresh plate event on the next poll without a remount', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    $component = Livewire::test('pages::overview');
+
+    // Sanity-check the initial "Latest activity" table doesn't already list
+    // the plate we're about to insert — otherwise the assertion below would
+    // be vacuous. Plate uses SA format so PlateNumber::forDisplay re-spaces
+    // it the same way the existing seed data ("HIT 001 GP") is re-spaced.
+    $component->assertDontSeeHtml('NEW 999 GP');
+
+    // Simulate a camera reporting a plate in between two poll cycles.
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'NEW999GP',
+        'captured_at' => Date::now(),
+    ]);
+
+    // A wire:poll cycle is functionally a $refresh on the same component
+    // instance — this exercises the same code path without simulating
+    // Livewire's timer.
+    $component->call('$refresh')
+        ->assertSeeHtml('NEW 999 GP');
+});

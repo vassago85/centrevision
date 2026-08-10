@@ -157,7 +157,9 @@ new #[Title('Security')] class extends Component {
     }
 }; ?>
 
-<div wire:poll.60s>
+{{-- 30s cadence matches the dashboard's alertCounts refresh so the bell and
+     this page never disagree by more than one poll cycle. --}}
+<div wire:poll.30s>
     <x-page-header title="Security · dwell alerts" :subtitle="(app(App\Support\Tenancy::class)->currentSite()?->name ?? 'All sites').' · live'">
         <x-slot:actions>
             @if (app(App\Support\Tenancy::class)->currentSite() !== null)

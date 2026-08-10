@@ -9,18 +9,33 @@
     'height' => 220,
     'ariaLabel' => null,
     'showLegend' => false,
+    // Optional identifier used to build a wire:key that changes only when the
+    // chart's data actually changes. Without a name we fall back to the old
+    // wire:ignore behaviour so unnamed charts on non-polled pages stay put.
+    'name' => null,
 ])
 
-<div
-    wire:ignore
-    x-data="tfBarChart(@js([
+@php
+    // Snapshot of everything Chart.js will draw. Hashing this lets Livewire
+    // leave the canvas alone when a poll brings identical data (no flicker,
+    // no wasted redraw) and remount it only when the numbers actually move.
+    $chartPayload = [
         'labels' => $labels,
         'values' => $values,
         'series' => $series,
         'color' => $color,
         'maxBarThickness' => $maxBarThickness,
         'showLegend' => $showLegend,
-    ]))"
+    ];
+@endphp
+
+<div
+    @if ($name)
+        wire:key="chart-{{ $name }}-{{ substr(md5(json_encode($chartPayload)), 0, 8) }}"
+    @else
+        wire:ignore
+    @endif
+    x-data="tfBarChart(@js($chartPayload))"
     {{ $attributes->class('relative w-full') }}
     style="height: {{ $height }}px"
 >

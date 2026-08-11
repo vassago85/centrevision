@@ -144,38 +144,92 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
 }
 
 document.addEventListener('alpine:init', () => {
-    window.Alpine.data('tfBarChart', (config = {}) => ({
+    /**
+     * Livewire-friendly Chart.js host. The canvas lives under `wire:ignore`,
+     * so morphdom never touches it. The wrapper has a `data-chart-payload`
+     * attribute Livewire keeps up to date on every poll; we watch that
+     * attribute and either mount the chart the first time or push the new
+     * numbers into the existing instance via chart.update('none').
+     *
+     * This is the mechanism that makes the dashboard update live without the
+     * old symptom where a fresh poll would tear the canvas out and Alpine's
+     * init would race an unlaid-out DOM node, leaving the chart blank until
+     * the user hit reload.
+     */
+    window.Alpine.data('tfBarChart', () => ({
         chart: null,
-        observer: null,
+        themeObserver: null,
+        payloadObserver: null,
+        currentPayload: null,
 
-        init() {
+        mount() {
+            this.currentPayload = this.readPayload();
             this.render();
 
-            // Redraw when the appearance switcher toggles the .dark class.
-            this.observer = new MutationObserver(() => this.render());
-            this.observer.observe(document.documentElement, {
+            this.themeObserver = new MutationObserver(() => this.render());
+            this.themeObserver.observe(document.documentElement, {
                 attributes: true,
                 attributeFilter: ['class'],
+            });
+
+            this.payloadObserver = new MutationObserver(() => {
+                const next = this.readPayload();
+                if (next === null) return;
+                if (this.samePayload(next, this.currentPayload)) return;
+
+                this.currentPayload = next;
+                this.applyPayload();
+            });
+            this.payloadObserver.observe(this.$el, {
+                attributes: true,
+                attributeFilter: ['data-chart-payload'],
             });
         },
 
         destroy() {
-            this.observer?.disconnect();
+            this.themeObserver?.disconnect();
+            this.payloadObserver?.disconnect();
             this.safeDestroy();
         },
 
+        readPayload() {
+            const raw = this.$el?.dataset?.chartPayload;
+            if (!raw) return null;
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                console.error('Chart payload parse failed:', error);
+                return null;
+            }
+        },
+
+        samePayload(a, b) {
+            if (a === b) return true;
+            if (!a || !b) return false;
+            return JSON.stringify(a) === JSON.stringify(b);
+        },
+
+        configFromPayload() {
+            const p = this.currentPayload || {};
+            return barChartConfig({
+                labels: p.labels ?? [],
+                values: p.values ?? [],
+                series: p.series,
+                color: p.color ?? 'accent',
+                maxBarThickness: p.maxBarThickness ?? 20,
+                showLegend: p.showLegend ?? false,
+                annotations: p.annotations ?? {},
+            });
+        },
+
         /**
-         * Chart.js keeps a per-canvas instance registry. When Livewire's
-         * morphdom pass swaps the canvas without our destroy() running (which
-         * can happen even under wire:ignore if a sibling forces a re-flow),
-         * the old instance stays registered against the fresh canvas and its
-         * next draw crashes on a null context. Chart.getChart(canvas) surfaces
-         * whatever is actually attached to the DOM node so we can dispose of
-         * it before mounting a fresh chart.
+         * Chart.js keeps a per-canvas instance registry. Even with wire:ignore
+         * on the canvas div, a page-level navigation or component teardown
+         * could leave an orphan instance registered against our canvas node,
+         * so we sweep any stray attachment before mounting a fresh chart.
          */
         safeDestroy() {
             const canvas = this.$refs?.canvas;
-
             const attached = canvas ? Chart.getChart(canvas) : null;
 
             if (attached && attached !== this.chart) {
@@ -193,32 +247,42 @@ document.addEventListener('alpine:init', () => {
 
             const canvas = this.$refs.canvas;
 
-            // Bail if the canvas has been ripped out from under us or has no
-            // paintable area yet — Chart.js crashes on a 0x0 context. Alpine
-            // will call render() again on the next observed change.
+            // Bail if the canvas has been ripped out or has no paintable area
+            // yet — Chart.js crashes on a 0x0 context. The theme observer or
+            // the next payload change will retry.
             if (!canvas || !canvas.isConnected || canvas.offsetParent === null) {
                 return;
             }
 
             try {
-                this.chart = new Chart(
-                    canvas,
-                    barChartConfig({
-                        labels: config.labels ?? [],
-                        values: config.values ?? [],
-                        series: config.series,
-                        color: config.color ?? 'accent',
-                        maxBarThickness: config.maxBarThickness ?? 20,
-                        showLegend: config.showLegend ?? false,
-                        annotations: config.annotations ?? {},
-                    })
-                );
+                this.chart = new Chart(canvas, this.configFromPayload());
             } catch (error) {
-                // A crash while drawing must not tear the whole page down —
-                // the KPI cards, tables and the rest of the dashboard are
-                // more important than one canvas.
                 console.error('Chart render failed:', error);
                 this.chart = null;
+            }
+        },
+
+        /**
+         * Push the new payload into the existing Chart.js instance instead of
+         * destroying and recreating it. Preserves the canvas across polls so
+         * the chart never blanks out. Falls back to a full render if the
+         * chart hasn't been created yet (e.g. first payload after a section
+         * became visible).
+         */
+        applyPayload() {
+            if (!this.chart) {
+                this.render();
+                return;
+            }
+
+            try {
+                const next = this.configFromPayload();
+                this.chart.data = next.data;
+                this.chart.options = next.options;
+                this.chart.update('none');
+            } catch (error) {
+                console.error('Chart update failed, remounting:', error);
+                this.render();
             }
         },
     }));

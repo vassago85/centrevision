@@ -9,9 +9,9 @@
     'height' => 220,
     'ariaLabel' => null,
     'showLegend' => false,
-    // Optional identifier used to build a wire:key that changes only when the
-    // chart's data actually changes. Without a name we fall back to the old
-    // wire:ignore behaviour so unnamed charts on non-polled pages stay put.
+    // Optional identifier. Kept for backwards compatibility with call sites
+    // that already pass one — the new in-place update path no longer needs
+    // it, but leaving it accepted avoids touching every dashboard page.
     'name' => null,
     // Per-label context appended to the tooltip. Shape:
     //   ['Aug 8' => ['Public holiday: Women's Day', 'Rain'], ...]
@@ -21,9 +21,10 @@
 ])
 
 @php
-    // Snapshot of everything Chart.js will draw. Hashing this lets Livewire
-    // leave the canvas alone when a poll brings identical data (no flicker,
-    // no wasted redraw) and remount it only when the numbers actually move.
+    // Snapshot of everything Chart.js needs to draw. This whole payload
+    // is written into a data attribute the Alpine component watches — when
+    // Livewire polls and morphs a new value in, the chart updates in place
+    // (chart.update()) instead of the canvas being torn out and remounted.
     $chartPayload = [
         'labels' => $labels,
         'values' => $values,
@@ -33,17 +34,20 @@
         'showLegend' => $showLegend,
         'annotations' => (object) $annotations,
     ];
+    $payloadJson = json_encode($chartPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 @endphp
 
 <div
-    @if ($name)
-        wire:key="chart-{{ $name }}-{{ substr(md5(json_encode($chartPayload)), 0, 8) }}"
-    @else
-        wire:ignore
-    @endif
-    x-data="tfBarChart(@js($chartPayload))"
+    x-data="tfBarChart"
+    x-init="mount()"
     {{ $attributes->class('relative w-full') }}
     style="height: {{ $height }}px"
+    data-chart-payload="{{ $payloadJson }}"
 >
-    <canvas x-ref="canvas" role="img" @if ($ariaLabel) aria-label="{{ $ariaLabel }}" @endif></canvas>
+    {{-- Canvas lives under wire:ignore so Livewire's morphdom pass never
+         tears the Chart.js instance out from under Alpine. Updates flow via
+         the data-chart-payload attribute on the parent. --}}
+    <div wire:ignore class="absolute inset-0">
+        <canvas x-ref="canvas" role="img" @if ($ariaLabel) aria-label="{{ $ariaLabel }}" @endif></canvas>
+    </div>
 </div>

@@ -18,6 +18,13 @@ new #[Title('Owners')] class extends Component {
     /** Organization being edited in the modal, or null when it's closed. */
     public ?int $editingBillingId = null;
 
+    /**
+     * Cached org name for the modal heading. Captured on openBilling so the
+     * form does not depend on a computed re-query the modal might paint
+     * before the server round-trip lands.
+     */
+    public string $billingOwnerName = '';
+
     /** Toggle: waive every fee (base, camera, variable, seats). */
     public bool $billingFree = false;
 
@@ -61,25 +68,22 @@ new #[Title('Owners')] class extends Component {
         return round($this->owners()->sum(fn (OwnerSummary $owner) => $owner->totalToPlatform()), 2);
     }
 
-    #[Computed]
-    public function editingOwner(): ?Organization
-    {
-        if ($this->editingBillingId === null) {
-            return null;
-        }
-
-        return Organization::query()->find($this->editingBillingId);
-    }
-
     /**
      * Prefill the modal from whatever the owner has stored today. Nulls are
      * shown as empty strings so the placeholder acts as the guide value.
      */
     public function openBilling(int $ownerId): void
     {
-        $owner = Organization::query()->findOrFail($ownerId);
+        $owner = Organization::query()->find($ownerId);
+
+        if ($owner === null) {
+            Flux::toast(variant: 'danger', text: 'That owner is gone.');
+
+            return;
+        }
 
         $this->editingBillingId = $owner->getKey();
+        $this->billingOwnerName = (string) $owner->name;
         $this->billingFree = (bool) $owner->setting('billing.free', false);
         $this->billingBaseFeeOverride = $this->formatOverride($owner->setting('billing.base_fee_override'));
         $this->billingVariableRateOverride = $this->formatOverride($owner->setting('billing.variable_rate_override'));
@@ -93,6 +97,7 @@ new #[Title('Owners')] class extends Component {
     {
         $this->reset([
             'editingBillingId',
+            'billingOwnerName',
             'billingFree',
             'billingBaseFeeOverride',
             'billingVariableRateOverride',
@@ -108,9 +113,24 @@ new #[Title('Owners')] class extends Component {
      */
     public function saveBilling(): void
     {
-        $owner = $this->editingOwner;
+        // Look up the org fresh from the primitive id rather than trusting a
+        // computed property — the latter can go stale between the modal open
+        // and the save if a full-page morph drops the cache, and an abort
+        // 404 out of a Livewire action bubbles up as a visible 404 page.
+        if ($this->editingBillingId === null) {
+            $this->closeBilling();
 
-        abort_if($owner === null, 404);
+            return;
+        }
+
+        $owner = Organization::query()->find($this->editingBillingId);
+
+        if ($owner === null) {
+            Flux::toast(variant: 'danger', text: 'That owner no longer exists.');
+            $this->closeBilling();
+
+            return;
+        }
 
         $data = $this->validate([
             'billingFree' => ['boolean'],
@@ -133,7 +153,7 @@ new #[Title('Owners')] class extends Component {
 
         // Drop the cached rows so the owner's badges and totals refresh in
         // place instead of showing stale figures until the next full reload.
-        unset($this->owners, $this->total, $this->editingOwner);
+        unset($this->owners, $this->total);
         $this->closeBilling();
 
         Flux::toast(variant: 'success', text: 'Billing plan saved.');
@@ -254,28 +274,32 @@ new #[Title('Owners')] class extends Component {
         </x-data-table>
     </x-panel>
 
+    {{--
+        Modal content is gated on the primitive `editingBillingId`, not on a
+        computed property. Flux teleports the modal to the DOM body and may
+        open it before the Livewire re-render lands; a computed re-query at
+        that instant would return null and paint an empty modal.
+    --}}
     <flux:modal wire:model.self="editingBillingId" @close="$wire.closeBilling()" class="md:w-[36rem]">
-        @php $current = $this->editingOwner; @endphp
-
-        @if ($current !== null)
-            <form wire:submit="saveBilling" class="space-y-5">
+        @if ($editingBillingId !== null)
+            <form wire:submit.prevent="saveBilling" class="space-y-5">
                 <div>
                     <flux:heading size="lg">Billing plan</flux:heading>
                     <p class="mt-1 text-[13px] text-ink-muted">
-                        Overrides apply to <span class="font-semibold text-ink">{{ $current->name }}</span> across every site
+                        Overrides apply to <span class="font-semibold text-ink">{{ $billingOwnerName }}</span> across every site
                         they run. Leave a field blank to fall back to the tier default.
                     </p>
                 </div>
 
                 <div class="rounded-lg border border-line bg-surface-2 p-4">
                     <flux:switch
-                        wire:model.live="billingFree"
+                        wire:model="billingFree"
                         label="Free account"
                         description="Waives base, camera, variable and security-operator seat fees. Shop share to the platform is unaffected."
                     />
                 </div>
 
-                <div @class(['grid gap-4 md:grid-cols-2', 'opacity-50 pointer-events-none' => $billingFree])>
+                <div class="grid gap-4 md:grid-cols-2">
                     <flux:input
                         wire:model="billingBaseFeeOverride"
                         type="number"

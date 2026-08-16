@@ -48,24 +48,64 @@ class BillingCalculator
         $cameras = $this->cameraCount($site);
         $payingShops = $this->payingShopCount($site);
         $subscription = $this->subscriptionFor($site);
+        $owner = $site->organization;
 
         // Metered: always derive the tier from the live camera count. A stored
         // base_tier is left on the row as a display hint but is not the source
         // of truth for what the owner pays — the number of cameras is.
         $tier = BaseTier::forCameraCount($cameras);
 
-        // A subscription may still carry a negotiated flat base fee (typically
-        // for hand-shaken Enterprise deals). If it is set to something above
-        // zero, honour it; otherwise use the published tier price.
-        $publishedBase = $tier->baseFee();
+        // A platform admin can flag an owner as "free" from the Owners page —
+        // typically for pilots, staff dogfooding, or comped partner accounts.
+        // Every fee collapses to zero without touching the site or camera
+        // records, so lifting the flag restores normal billing exactly.
+        if ($owner !== null && $owner->isOnFreeBillingPlan()) {
+            return new SiteCharge(
+                site: $site,
+                tier: $tier,
+                cameraCount: $cameras,
+                payingShopCount: $payingShops,
+                baseFee: 0.0,
+                cameraSurcharge: 0.0,
+                variableFee: 0.0,
+                uncappedVariableFee: 0.0,
+                variableFeeCap: null,
+                prorationFactor: $factor,
+            );
+        }
+
+        // Base fee resolution — most specific wins:
+        //   1. Per-owner override (a hand-shaken flat fee that applies to
+        //      every site the owner runs).
+        //   2. Per-site negotiated base_fee on SiteSubscription (typically
+        //      an Enterprise deal on one specific mall).
+        //   3. Published tier price derived from the camera count.
+        $ownerBaseOverride = $this->positiveOverride($owner, 'billing.base_fee_override');
         $negotiatedBase = $subscription !== null ? (float) $subscription->base_fee : 0.0;
-        $baseFee = $negotiatedBase > 0.0 ? $negotiatedBase : $publishedBase;
+        $publishedBase = $tier->baseFee();
 
-        $rate = $subscription !== null && (float) $subscription->variable_rate_per_camera_per_subuser > 0
+        $baseFee = match (true) {
+            $ownerBaseOverride !== null => $ownerBaseOverride,
+            $negotiatedBase > 0.0 => $negotiatedBase,
+            default => $publishedBase,
+        };
+
+        // Same precedence for the variable rate.
+        $ownerRateOverride = $this->positiveOverride($owner, 'billing.variable_rate_override');
+        $subscriptionRate = $subscription !== null && (float) $subscription->variable_rate_per_camera_per_subuser > 0
             ? (float) $subscription->variable_rate_per_camera_per_subuser
-            : (float) config('trafficflow.variable_rate_per_camera_per_subuser');
+            : null;
 
-        $cap = $subscription?->variable_fee_cap === null ? null : (float) $subscription->variable_fee_cap;
+        $rate = $ownerRateOverride
+            ?? $subscriptionRate
+            ?? (float) config('trafficflow.variable_rate_per_camera_per_subuser');
+
+        // Cap: an owner-level override wins when set (owner-level of 0 is
+        // read as "no cap explicitly set" — a real "always uncapped" answer
+        // is left to the absence of both).
+        $ownerCapOverride = $this->positiveOverride($owner, 'billing.variable_fee_cap_override');
+        $cap = $ownerCapOverride
+            ?? ($subscription?->variable_fee_cap === null ? null : (float) $subscription->variable_fee_cap);
 
         // Sites with no active cameras cost nothing — an owner setting up a new
         // property should not see a base fee until they actually plug something
@@ -104,6 +144,30 @@ class BillingCalculator
     }
 
     /**
+     * Read a numeric owner-level override from settings, returning null when
+     * it is unset, blank, or non-positive — the latter treated as "no
+     * override" so an accidental zero in the DB doesn't wipe out billing.
+     * "Free" is expressed via the separate `billing.free` flag, not via a
+     * zero override.
+     */
+    protected function positiveOverride(?Organization $owner, string $key): ?float
+    {
+        if ($owner === null) {
+            return null;
+        }
+
+        $value = $owner->setting($key);
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $value = (float) $value;
+
+        return $value > 0.0 ? $value : null;
+    }
+
+    /**
      * Every site the owner runs, so the consolidated invoice has one line each.
      *
      * @return Collection<int, SiteCharge>
@@ -137,10 +201,16 @@ class BillingCalculator
     /**
      * Flat charge: (seats) × (configured monthly rate). Independent of camera
      * count and shop count on purpose — a seat is a seat regardless of how
-     * busy the site is.
+     * busy the site is. A free-plan owner pays nothing for seats either;
+     * otherwise a pilot account would suddenly grow a seat bill the moment
+     * they hired their first guard.
      */
     public function securityOperatorSeatCharge(Organization $owner): float
     {
+        if ($owner->isOnFreeBillingPlan()) {
+            return 0.0;
+        }
+
         $count = $this->securityOperatorSeatCount($owner);
 
         if ($count === 0) {

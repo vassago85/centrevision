@@ -277,3 +277,80 @@ it('rolls the seat charge into the owner monthly total', function () {
 
     expect($this->calculator->ownerTotal($this->owner))->toBe(round($siteTotal + $seatTotal, 2));
 });
+
+// ── Per-owner billing overrides ─────────────────────────────────────────────
+
+it('waives every fee for an owner on the free plan', function () {
+    Camera::factory()->count(6)->for($this->site)->create();
+    payingShops($this->site, 4);
+    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+
+    $this->owner->update(['settings' => ['billing' => ['free' => true]]]);
+
+    $charge = $this->calculator->chargeForSite($this->site->fresh());
+
+    expect($charge->baseFee)->toBe(0.0)
+        ->and($charge->variableFee)->toBe(0.0)
+        ->and($charge->cameraSurcharge)->toBe(0.0)
+        ->and($charge->total())->toBe(0.0)
+        ->and($this->calculator->securityOperatorSeatCharge($this->owner->fresh()))->toBe(0.0)
+        ->and($this->calculator->ownerTotal($this->owner->fresh()))->toBe(0.0);
+});
+
+it('honours a per-owner base fee override across every site', function () {
+    Camera::factory()->count(3)->for($this->site)->create();
+
+    $second = Site::factory()->for_($this->owner)->create();
+    Camera::factory()->count(6)->for($second)->create();
+
+    $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 2500.00]]]);
+
+    // Both the 3-camera Starter site and the 6-camera Standard site should
+    // pay the negotiated R2,500 instead of their tier defaults.
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(2500.00)
+        ->and($this->calculator->chargeForSite($second->fresh())->baseFee)->toBe(2500.00);
+});
+
+it('honours a per-owner variable rate override', function () {
+    Camera::factory()->count(4)->for($this->site)->create();
+    payingShops($this->site, 3);
+
+    $this->owner->update(['settings' => ['billing' => ['variable_rate_override' => 10.00]]]);
+
+    // 4 cameras × 3 shops × R10 = R120 (default rate would yield R216).
+    expect($this->calculator->chargeForSite($this->site->fresh())->variableFee)->toBe(120.00);
+});
+
+it('honours a per-owner variable fee cap override', function () {
+    Camera::factory()->count(8)->for($this->site)->create();
+    payingShops($this->site, 10);
+
+    $this->owner->update(['settings' => ['billing' => ['variable_fee_cap_override' => 400.00]]]);
+
+    // 8 cameras × 10 shops × R18 = R1,440 uncapped, clamped to the owner's R400.
+    $charge = $this->calculator->chargeForSite($this->site->fresh());
+
+    expect($charge->uncappedVariableFee)->toBe(1440.00)
+        ->and($charge->variableFee)->toBe(400.00)
+        ->and($charge->wasCapped())->toBeTrue();
+});
+
+it('prefers a per-owner override over the site-level negotiated fee', function () {
+    Camera::factory()->count(5)->for($this->site)->create();
+
+    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 9000.00]);
+    $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 2000.00]]]);
+
+    // Owner-level override outranks the site-level negotiated fee.
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(2000.00);
+});
+
+it('treats a zero override as no override', function () {
+    Camera::factory()->count(3)->for($this->site)->create();
+
+    // A zero override in the DB (e.g. an accidental save) must not wipe out
+    // the tier price — free accounts are expressed via the `free` flag.
+    $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 0]]]);
+
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(1800.00);
+});

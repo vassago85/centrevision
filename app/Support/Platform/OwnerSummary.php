@@ -19,6 +19,8 @@ class OwnerSummary
         public readonly float $platformShopShare,
         public readonly bool $lapsed,
         public readonly ?Partner $partner,
+        public readonly bool $isFree = false,
+        public readonly bool $hasCustomPlan = false,
     ) {}
 
     /**

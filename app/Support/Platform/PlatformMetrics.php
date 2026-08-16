@@ -118,6 +118,8 @@ class PlatformMetrics
                 platformShopShare: $this->calculator->shopRevenueSplit($owner)['platform_share'],
                 lapsed: $this->hasLapsedSubscription($owner),
                 partner: $owner->referredByPartner,
+                isFree: $owner->isOnFreeBillingPlan(),
+                hasCustomPlan: $owner->hasCustomBillingPlan(),
             );
         })->sortByDesc(fn (OwnerSummary $summary) => $summary->totalToPlatform())->values();
     }

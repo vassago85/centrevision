@@ -38,11 +38,27 @@ class Organization extends Model
     use HasFactory;
 
     /**
-     * Revenue-share defaults, overridable per owner organization in Settings.
+     * Revenue-share and billing defaults, overridable per owner organization
+     * from the platform admin's Owners page. Only the keys listed here have
+     * meaning — arbitrary values written to `settings` are ignored by the
+     * billing pipeline.
      */
     public const DEFAULT_SETTINGS = [
-        // Share of each shop's monthly fee the platform retains.
         'platform_shop_revenue_share' => 0.30,
+
+        // Per-owner billing overrides applied by BillingCalculator. `free`
+        // short-circuits every fee (base, camera surcharge, variable, seat)
+        // to zero. The three `*_override` values, when set to a positive
+        // number, replace what the site-level SiteSubscription (or the
+        // published tier) would otherwise charge. `notes` is a free-text
+        // reminder shown to platform admins ("6-month pilot for X.").
+        'billing' => [
+            'free' => false,
+            'base_fee_override' => null,
+            'variable_rate_override' => null,
+            'variable_fee_cap_override' => null,
+            'notes' => '',
+        ],
     ];
 
     protected function casts(): array
@@ -131,6 +147,37 @@ class Organization extends Model
     public function setting(string $key, mixed $default = null): mixed
     {
         return data_get($this->settings, $key, $default ?? data_get(self::DEFAULT_SETTINGS, $key));
+    }
+
+    /**
+     * True when a platform admin has ticked "Free account" on this owner —
+     * BillingCalculator skips every fee (base, variable, seat) in that case.
+     */
+    public function isOnFreeBillingPlan(): bool
+    {
+        return (bool) $this->setting('billing.free', false);
+    }
+
+    /**
+     * True when any of the per-owner billing knobs (free, or one of the
+     * *_override values) is set to something meaningful, so the UI can
+     * badge the row as "Custom".
+     */
+    public function hasCustomBillingPlan(): bool
+    {
+        if ($this->isOnFreeBillingPlan()) {
+            return true;
+        }
+
+        foreach (['base_fee_override', 'variable_rate_override', 'variable_fee_cap_override'] as $key) {
+            $value = $this->setting("billing.{$key}");
+
+            if ($value !== null && $value !== '' && (float) $value > 0.0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

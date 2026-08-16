@@ -112,6 +112,42 @@ it('recalculates last month on demand', function () {
     expect((float) PartnerPayout::sole()->commission_amount)->toBe(1000.00);
 });
 
+it('lets a platform admin flag an owner as free', function () {
+    Livewire::test('pages::platform.owners')
+        ->call('openBilling', $this->owner->id)
+        ->assertSet('editingBillingId', $this->owner->id)
+        ->assertSet('billingFree', false)
+        ->set('billingFree', true)
+        ->call('saveBilling')
+        ->assertSet('editingBillingId', null);
+
+    expect($this->owner->fresh()->isOnFreeBillingPlan())->toBeTrue();
+});
+
+it('lets a platform admin save a per-owner base fee override', function () {
+    Livewire::test('pages::platform.owners')
+        ->call('openBilling', $this->owner->id)
+        ->set('billingBaseFeeOverride', '2500')
+        ->set('billingNotes', '6-month pilot')
+        ->call('saveBilling')
+        ->assertHasNoErrors();
+
+    $fresh = $this->owner->fresh();
+
+    expect($fresh->setting('billing.base_fee_override'))->toBe(2500.0)
+        ->and($fresh->setting('billing.notes'))->toBe('6-month pilot')
+        ->and($fresh->hasCustomBillingPlan())->toBeTrue();
+});
+
+it('badges free and custom plans in the owners table', function () {
+    $this->owner->update(['settings' => ['billing' => ['free' => true]]]);
+    $this->other->update(['settings' => ['billing' => ['base_fee_override' => 2500.00]]]);
+
+    Livewire::test('pages::platform.owners')
+        ->assertSee('Free')
+        ->assertSee('Custom');
+});
+
 it('keeps owner admins out of the platform section', function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 

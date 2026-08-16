@@ -148,6 +148,67 @@ it('badges free and custom plans in the owners table', function () {
         ->assertSee('Custom');
 });
 
+it('adds a new partner from the platform partners page', function () {
+    Livewire::test('pages::platform.partners')
+        ->call('openPartner')
+        ->assertSet('editingPartnerId', 0)
+        ->set('partnerName', 'Southgate Installs')
+        ->set('partnerEmail', 'billing@southgate.co.za')
+        ->set('partnerCommissionPercent', '15')
+        ->call('savePartner')
+        ->assertHasNoErrors()
+        ->assertSet('editingPartnerId', null);
+
+    $partner = Partner::where('email', 'billing@southgate.co.za')->firstOrFail();
+
+    expect($partner->name)->toBe('Southgate Installs')
+        ->and((float) $partner->commission_rate)->toBe(0.15);
+});
+
+it('rejects a duplicate partner email', function () {
+    Livewire::test('pages::platform.partners')
+        ->call('openPartner')
+        ->set('partnerName', 'Someone Else')
+        ->set('partnerEmail', $this->partner->email)
+        ->set('partnerCommissionPercent', '10')
+        ->call('savePartner')
+        ->assertHasErrors(['partnerEmail']);
+});
+
+it('edits an existing partner in place', function () {
+    Livewire::test('pages::platform.partners')
+        ->call('openPartner', $this->partner->id)
+        ->assertSet('partnerName', $this->partner->name)
+        ->set('partnerCommissionPercent', '25')
+        ->call('savePartner')
+        ->assertHasNoErrors();
+
+    expect((float) $this->partner->fresh()->commission_rate)->toBe(0.25);
+});
+
+it('assigns a partner to an owner from the edit-billing modal', function () {
+    Livewire::test('pages::platform.owners')
+        ->call('openBilling', $this->other->id)
+        ->assertSet('billingPartnerId', '')
+        ->set('billingPartnerId', (string) $this->partner->id)
+        ->call('saveBilling')
+        ->assertHasNoErrors();
+
+    expect($this->other->fresh()->referred_by_partner_id)->toBe($this->partner->id);
+});
+
+it('clears an owner-partner attribution when the dropdown is set to empty', function () {
+    // Owner A already has $this->partner attached in the beforeEach.
+    Livewire::test('pages::platform.owners')
+        ->call('openBilling', $this->owner->id)
+        ->assertSet('billingPartnerId', (string) $this->partner->id)
+        ->set('billingPartnerId', '')
+        ->call('saveBilling')
+        ->assertHasNoErrors();
+
+    expect($this->owner->fresh()->referred_by_partner_id)->toBeNull();
+});
+
 it('keeps owner admins out of the platform section', function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 

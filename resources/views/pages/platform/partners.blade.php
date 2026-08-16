@@ -6,11 +6,30 @@ use App\Models\Partner;
 use App\Models\PartnerPayout;
 use Flux\Flux;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
 new #[Title('Partners')] class extends Component {
+    // ── Add / edit modal ─────────────────────────────────────────────────
+    /**
+     * Non-null while the partner editor is open. 0 means "adding a new
+     * partner"; a positive id means "editing that partner". The primitive
+     * type is what drives the flux:modal open/close binding.
+     */
+    public ?int $editingPartnerId = null;
+
+    public string $partnerName = '';
+
+    public string $partnerEmail = '';
+
+    /**
+     * Held as a string percentage (0–100) so the input reads naturally to
+     * a human ("20" for 20%). Converted to a 0.0–1.0 decimal on save.
+     */
+    public string $partnerCommissionPercent = '20';
+
     /**
      * @return Collection<int, Partner>
      */
@@ -62,12 +81,111 @@ new #[Title('Partners')] class extends Component {
 
         Flux::toast(variant: 'success', text: 'Payout marked as paid.');
     }
+
+    /**
+     * Open the modal. Pass a partner id to edit, or null (default) to add
+     * a brand-new partner. Zero is used as the "creating" sentinel because
+     * flux:modal binds against an `?int` and needs a non-null value to open.
+     */
+    public function openPartner(?int $partnerId = null): void
+    {
+        if ($partnerId === null) {
+            $this->editingPartnerId = 0;
+            $this->partnerName = '';
+            $this->partnerEmail = '';
+            $this->partnerCommissionPercent = '20';
+        } else {
+            $partner = Partner::query()->find($partnerId);
+
+            if ($partner === null) {
+                Flux::toast(variant: 'danger', text: 'That partner is gone.');
+
+                return;
+            }
+
+            $this->editingPartnerId = $partner->getKey();
+            $this->partnerName = (string) $partner->name;
+            $this->partnerEmail = (string) $partner->email;
+            $this->partnerCommissionPercent = $this->formatPercent((float) $partner->commission_rate);
+        }
+
+        $this->resetValidation();
+    }
+
+    public function closePartner(): void
+    {
+        $this->reset([
+            'editingPartnerId',
+            'partnerName',
+            'partnerEmail',
+            'partnerCommissionPercent',
+        ]);
+    }
+
+    public function savePartner(): void
+    {
+        // Distinguish "creating" (id === 0) from "editing" (id > 0). Anything
+        // else — including a partner id that has been deleted between opens
+        // — is treated as a stale editor and quietly closed.
+        $isEditing = $this->editingPartnerId !== null && $this->editingPartnerId > 0;
+        $existing = $isEditing ? Partner::query()->find($this->editingPartnerId) : null;
+
+        if ($isEditing && $existing === null) {
+            Flux::toast(variant: 'danger', text: 'That partner no longer exists.');
+            $this->closePartner();
+
+            return;
+        }
+
+        $data = $this->validate([
+            'partnerName' => ['required', 'string', 'max:120'],
+            'partnerEmail' => [
+                'required',
+                'email',
+                'max:255',
+                Rule::unique('partners', 'email')->ignore($existing?->getKey()),
+            ],
+            // Percent as displayed (0–100). Converted below.
+            'partnerCommissionPercent' => ['required', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        $attributes = [
+            'name' => trim($data['partnerName']),
+            'email' => mb_strtolower(trim($data['partnerEmail'])),
+            'commission_rate' => round(((float) $data['partnerCommissionPercent']) / 100, 4),
+        ];
+
+        if ($existing !== null) {
+            $existing->update($attributes);
+            $message = 'Partner updated.';
+        } else {
+            Partner::create($attributes);
+            $message = 'Partner added.';
+        }
+
+        unset($this->partners);
+        $this->closePartner();
+
+        Flux::toast(variant: 'success', text: $message);
+    }
+
+    protected function formatPercent(float $rate): string
+    {
+        $percent = $rate * 100;
+
+        // 20.0 → "20", 12.5 → "12.5" — same trailing-zero trim as the money
+        // fields on the owners page so the input isn't visually noisy.
+        return $percent === floor($percent)
+            ? (string) (int) $percent
+            : rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
+    }
 }; ?>
 
 <div>
     <x-page-header title="Partners" subtitle="Referrals and commission payouts">
         <x-slot:actions>
             <flux:button size="sm" variant="ghost" wire:click="recalculate">Recalculate last month</flux:button>
+            <flux:button size="sm" variant="primary" wire:click="openPartner">Add partner</flux:button>
         </x-slot:actions>
     </x-page-header>
 
@@ -80,9 +198,10 @@ new #[Title('Partners')] class extends Component {
                 ['label' => 'Rate', 'align' => 'right'],
                 ['label' => 'Pending', 'align' => 'right'],
                 ['label' => 'Paid to date', 'align' => 'right'],
+                ['label' => '', 'align' => 'right'],
             ]"
             :is-empty="$this->partners->isEmpty()"
-            empty="No partners have been registered yet."
+            empty="No partners have been registered yet. Click 'Add partner' to get started."
         >
             @foreach ($this->partners as $partner)
                 <tr wire:key="partner-{{ $partner->id }}">
@@ -97,6 +216,11 @@ new #[Title('Partners')] class extends Component {
                     </td>
                     <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">
                         R{{ number_format((float) $partner->paid_commission, 2) }}
+                    </td>
+                    <td class="border-b border-line py-2 text-right">
+                        <flux:button size="xs" variant="ghost" wire:click="openPartner({{ $partner->id }})">
+                            Edit
+                        </flux:button>
                     </td>
                 </tr>
             @endforeach
@@ -142,4 +266,61 @@ new #[Title('Partners')] class extends Component {
             @endforeach
         </x-data-table>
     </x-panel>
+
+    {{--
+        Same defensive shape as the Owners edit-billing modal: gate on the
+        primitive `editingPartnerId`, not on a computed re-query, so Flux
+        never paints an empty modal from stale DOM.
+    --}}
+    <flux:modal wire:model.self="editingPartnerId" @close="$wire.closePartner()" class="md:w-[32rem]">
+        @if ($editingPartnerId !== null)
+            <form wire:submit.prevent="savePartner" class="space-y-5">
+                <div>
+                    <flux:heading size="lg">
+                        {{ $editingPartnerId > 0 ? 'Edit partner' : 'Add partner' }}
+                    </flux:heading>
+                    <p class="mt-1 text-[13px] text-ink-muted">
+                        Partners earn a share of every owner they refer, calculated monthly and shown in the Payout history below.
+                    </p>
+                </div>
+
+                <div class="grid gap-4">
+                    <flux:input
+                        wire:model="partnerName"
+                        label="Name"
+                        placeholder="e.g. Northgate Installs"
+                        required
+                    />
+
+                    <flux:input
+                        wire:model="partnerEmail"
+                        type="email"
+                        label="Email"
+                        placeholder="paul@northgate.co.za"
+                        description="Used to identify the partner and, later, to email them their payout advice."
+                        required
+                    />
+
+                    <flux:input
+                        wire:model="partnerCommissionPercent"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        label="Commission rate (%)"
+                        placeholder="20"
+                        description="Percentage of the referred owner's monthly platform revenue paid out as commission."
+                        required
+                    />
+                </div>
+
+                <div class="flex justify-end gap-2">
+                    <flux:button variant="ghost" type="button" wire:click="closePartner">Cancel</flux:button>
+                    <flux:button variant="primary" type="submit">
+                        {{ $editingPartnerId > 0 ? 'Save changes' : 'Add partner' }}
+                    </flux:button>
+                </div>
+            </form>
+        @endif
+    </flux:modal>
 </div>

@@ -2,6 +2,7 @@
 
 use App\Enums\BaseTier;
 use App\Models\Organization;
+use App\Models\Partner;
 use App\Support\Platform\OwnerSummary;
 use App\Support\Platform\PlatformMetrics;
 use Illuminate\Support\Collection;
@@ -24,6 +25,13 @@ new #[Title('Owners')] class extends Component {
      * before the server round-trip lands.
      */
     public string $billingOwnerName = '';
+
+    /**
+     * Partner attributed with the referral. Empty string = "no partner"
+     * (a select cannot bind directly to null through Livewire without extra
+     * juggling; the save handler converts "" back to null).
+     */
+    public string $billingPartnerId = '';
 
     /** Toggle: waive every fee (base, camera, variable, seats). */
     public bool $billingFree = false;
@@ -69,6 +77,17 @@ new #[Title('Owners')] class extends Component {
     }
 
     /**
+     * Partner picker options for the edit-billing modal.
+     *
+     * @return Collection<int, Partner>
+     */
+    #[Computed]
+    public function availablePartners(): Collection
+    {
+        return Partner::query()->orderBy('name')->get(['id', 'name']);
+    }
+
+    /**
      * Prefill the modal from whatever the owner has stored today. Nulls are
      * shown as empty strings so the placeholder acts as the guide value.
      */
@@ -84,6 +103,9 @@ new #[Title('Owners')] class extends Component {
 
         $this->editingBillingId = $owner->getKey();
         $this->billingOwnerName = (string) $owner->name;
+        $this->billingPartnerId = $owner->referred_by_partner_id === null
+            ? ''
+            : (string) $owner->referred_by_partner_id;
         $this->billingFree = (bool) $owner->setting('billing.free', false);
         $this->billingBaseFeeOverride = $this->formatOverride($owner->setting('billing.base_fee_override'));
         $this->billingVariableRateOverride = $this->formatOverride($owner->setting('billing.variable_rate_override'));
@@ -98,6 +120,7 @@ new #[Title('Owners')] class extends Component {
         $this->reset([
             'editingBillingId',
             'billingOwnerName',
+            'billingPartnerId',
             'billingFree',
             'billingBaseFeeOverride',
             'billingVariableRateOverride',
@@ -133,12 +156,26 @@ new #[Title('Owners')] class extends Component {
         }
 
         $data = $this->validate([
+            // Empty string = "no partner assigned"; anything else must be a
+            // real partner id. Validated as an integer to catch tampering.
+            'billingPartnerId' => ['nullable', 'string'],
             'billingFree' => ['boolean'],
             'billingBaseFeeOverride' => ['nullable', 'numeric', 'min:0', 'max:1000000'],
             'billingVariableRateOverride' => ['nullable', 'numeric', 'min:0', 'max:100000'],
             'billingVariableFeeCapOverride' => ['nullable', 'numeric', 'min:0', 'max:1000000'],
             'billingNotes' => ['nullable', 'string', 'max:1000'],
         ]);
+
+        $partnerId = ($data['billingPartnerId'] ?? '') === ''
+            ? null
+            : (int) $data['billingPartnerId'];
+
+        // Guard against a tampered select value pointing at a partner that
+        // does not exist: rather than crashing on the FK insert, just null
+        // it out and let the admin re-pick.
+        if ($partnerId !== null && ! Partner::query()->whereKey($partnerId)->exists()) {
+            $partnerId = null;
+        }
 
         $settings = $owner->settings ?? [];
         $settings['billing'] = [
@@ -149,7 +186,10 @@ new #[Title('Owners')] class extends Component {
             'notes' => trim((string) ($data['billingNotes'] ?? '')),
         ];
 
-        $owner->forceFill(['settings' => $settings])->save();
+        $owner->forceFill([
+            'settings' => $settings,
+            'referred_by_partner_id' => $partnerId,
+        ])->save();
 
         // Drop the cached rows so the owner's badges and totals refresh in
         // place instead of showing stale figures until the next full reload.
@@ -290,6 +330,18 @@ new #[Title('Owners')] class extends Component {
                         they run. Leave a field blank to fall back to the tier default.
                     </p>
                 </div>
+
+                <flux:select
+                    wire:model="billingPartnerId"
+                    label="Referred by partner"
+                    description="Attributes this owner to an installer / reseller so they earn commission on the monthly total. Manage partners in the Partners tab."
+                >
+                    <flux:select.option value="">— No partner —</flux:select.option>
+
+                    @foreach ($this->availablePartners as $partner)
+                        <flux:select.option value="{{ $partner->id }}">{{ $partner->name }}</flux:select.option>
+                    @endforeach
+                </flux:select>
 
                 <div class="rounded-lg border border-line bg-surface-2 p-4">
                     <flux:switch

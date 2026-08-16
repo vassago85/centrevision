@@ -14,9 +14,18 @@ use Livewire\Component;
 new #[Title('Partners')] class extends Component {
     // ── Add / edit modal ─────────────────────────────────────────────────
     /**
-     * Non-null while the partner editor is open. 0 means "adding a new
-     * partner"; a positive id means "editing that partner". The primitive
-     * type is what drives the flux:modal open/close binding.
+     * Modal visibility flag — bound directly to `<flux:modal>`. Kept
+     * separate from `editingPartnerId` because Flux's modal treats its
+     * wire:model as boolean open/closed state and will coerce an `?int`
+     * property to `1` on close, silently retargeting the save. See the
+     * matching comment on owners.blade.php for the full story.
+     */
+    public bool $showPartner = false;
+
+    /**
+     * Partner being edited, or null when adding a brand-new partner.
+     * Independent from modal visibility now — the modal open state is
+     * driven by `$showPartner`, so this stays purely about which record.
      */
     public ?int $editingPartnerId = null;
 
@@ -84,13 +93,13 @@ new #[Title('Partners')] class extends Component {
 
     /**
      * Open the modal. Pass a partner id to edit, or null (default) to add
-     * a brand-new partner. Zero is used as the "creating" sentinel because
-     * flux:modal binds against an `?int` and needs a non-null value to open.
+     * a brand-new partner. `editingPartnerId === null` is the "adding" state
+     * now that modal visibility is tracked separately on `$showPartner`.
      */
     public function openPartner(?int $partnerId = null): void
     {
         if ($partnerId === null) {
-            $this->editingPartnerId = 0;
+            $this->editingPartnerId = null;
             $this->partnerName = '';
             $this->partnerEmail = '';
             $this->partnerCommissionPercent = '20';
@@ -109,12 +118,14 @@ new #[Title('Partners')] class extends Component {
             $this->partnerCommissionPercent = $this->formatPercent((float) $partner->commission_rate);
         }
 
+        $this->showPartner = true;
         $this->resetValidation();
     }
 
     public function closePartner(): void
     {
         $this->reset([
+            'showPartner',
             'editingPartnerId',
             'partnerName',
             'partnerEmail',
@@ -124,13 +135,15 @@ new #[Title('Partners')] class extends Component {
 
     public function savePartner(): void
     {
-        // Distinguish "creating" (id === 0) from "editing" (id > 0). Anything
-        // else — including a partner id that has been deleted between opens
-        // — is treated as a stale editor and quietly closed.
-        $isEditing = $this->editingPartnerId !== null && $this->editingPartnerId > 0;
-        $existing = $isEditing ? Partner::query()->find($this->editingPartnerId) : null;
+        // "Creating" = editingPartnerId is null; "editing" = a real id we can
+        // resolve. A non-null id that no longer resolves is a stale editor
+        // (deleted between opens) — close it quietly rather than saving into
+        // whatever record now sits at that key.
+        $existing = $this->editingPartnerId === null
+            ? null
+            : Partner::query()->find($this->editingPartnerId);
 
-        if ($isEditing && $existing === null) {
+        if ($this->editingPartnerId !== null && $existing === null) {
             Flux::toast(variant: 'danger', text: 'That partner no longer exists.');
             $this->closePartner();
 
@@ -268,16 +281,17 @@ new #[Title('Partners')] class extends Component {
     </x-panel>
 
     {{--
-        Same defensive shape as the Owners edit-billing modal: gate on the
-        primitive `editingPartnerId`, not on a computed re-query, so Flux
-        never paints an empty modal from stale DOM.
+        Same shape as the Owners edit-billing modal: the modal binds to a
+        dedicated `showPartner` boolean, and content is gated on that flag.
+        `editingPartnerId` stays a pure state field so Flux can't coerce a
+        boolean into it during a close round-trip.
     --}}
-    <flux:modal wire:model.self="editingPartnerId" @close="$wire.closePartner()" class="md:w-[32rem]">
-        @if ($editingPartnerId !== null)
+    <flux:modal wire:model.self="showPartner" @close="$wire.closePartner()" class="md:w-[32rem]">
+        @if ($showPartner)
             <form wire:submit.prevent="savePartner" class="space-y-5">
                 <div>
                     <flux:heading size="lg">
-                        {{ $editingPartnerId > 0 ? 'Edit partner' : 'Add partner' }}
+                        {{ $editingPartnerId !== null ? 'Edit partner' : 'Add partner' }}
                     </flux:heading>
                     <p class="mt-1 text-[13px] text-ink-muted">
                         Partners earn a share of every owner they refer, calculated monthly and shown in the Payout history below.
@@ -317,7 +331,7 @@ new #[Title('Partners')] class extends Component {
                 <div class="flex justify-end gap-2">
                     <flux:button variant="ghost" type="button" wire:click="closePartner">Cancel</flux:button>
                     <flux:button variant="primary" type="submit">
-                        {{ $editingPartnerId > 0 ? 'Save changes' : 'Add partner' }}
+                        {{ $editingPartnerId !== null ? 'Save changes' : 'Add partner' }}
                     </flux:button>
                 </div>
             </form>

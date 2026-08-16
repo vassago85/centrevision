@@ -115,13 +115,26 @@ it('recalculates last month on demand', function () {
 it('lets a platform admin flag an owner as free', function () {
     Livewire::test('pages::platform.owners')
         ->call('openBilling', $this->owner->id)
+        ->assertSet('showBilling', true)
         ->assertSet('editingBillingId', $this->owner->id)
         ->assertSet('billingFree', false)
         ->set('billingFree', true)
         ->call('saveBilling')
+        ->assertSet('showBilling', false)
         ->assertSet('editingBillingId', null);
 
     expect($this->owner->fresh()->isOnFreeBillingPlan())->toBeTrue();
+});
+
+it('never binds the modal open state to the owner id property', function () {
+    // Regression: previously `<flux:modal wire:model.self="editingBillingId">`
+    // let Flux coerce `true` back into the int property on close, causing
+    // saveBilling to target org id 1 instead of whichever owner was clicked.
+    // The modal must be driven by the boolean flag, and the id must stay put
+    // through the whole open → edit → save flow.
+    expect(file_get_contents(resource_path('views/pages/platform/owners.blade.php')))
+        ->toContain('wire:model.self="showBilling"')
+        ->not->toContain('wire:model.self="editingBillingId"');
 });
 
 it('lets a platform admin save a per-owner base fee override', function () {
@@ -151,18 +164,29 @@ it('badges free and custom plans in the owners table', function () {
 it('adds a new partner from the platform partners page', function () {
     Livewire::test('pages::platform.partners')
         ->call('openPartner')
-        ->assertSet('editingPartnerId', 0)
+        ->assertSet('showPartner', true)
+        ->assertSet('editingPartnerId', null)
         ->set('partnerName', 'Southgate Installs')
         ->set('partnerEmail', 'billing@southgate.co.za')
         ->set('partnerCommissionPercent', '15')
         ->call('savePartner')
         ->assertHasNoErrors()
+        ->assertSet('showPartner', false)
         ->assertSet('editingPartnerId', null);
 
     $partner = Partner::where('email', 'billing@southgate.co.za')->firstOrFail();
 
     expect($partner->name)->toBe('Southgate Installs')
         ->and((float) $partner->commission_rate)->toBe(0.15);
+});
+
+it('never binds the partner modal open state to the partner id property', function () {
+    // Regression: same class of bug as the owners billing modal — Flux would
+    // coerce `true` back into `editingPartnerId` on close, so a subsequent
+    // save could accidentally edit whatever partner sat at that key.
+    expect(file_get_contents(resource_path('views/pages/platform/partners.blade.php')))
+        ->toContain('wire:model.self="showPartner"')
+        ->not->toContain('wire:model.self="editingPartnerId"');
 });
 
 it('rejects a duplicate partner email', function () {

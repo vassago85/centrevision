@@ -16,6 +16,17 @@ new #[Title('Owners')] class extends Component {
     public bool $lapsedOnly = false;
 
     // ── Billing editor ───────────────────────────────────────────────────
+    /**
+     * Modal visibility. Bound directly to the `<flux:modal>` — Flux writes a
+     * boolean back through this model on client-side close/open events, so
+     * we intentionally keep this separate from `editingBillingId`. Binding
+     * the modal to the int id ended up round-tripping `true` back into the
+     * property, PHP coerced it to `1`, and saveBilling then targeted org 1
+     * instead of the owner the admin actually clicked. See
+     * vendor/livewire/flux/stubs/resources/views/flux/modal/index.blade.php.
+     */
+    public bool $showBilling = false;
+
     /** Organization being edited in the modal, or null when it's closed. */
     public ?int $editingBillingId = null;
 
@@ -112,12 +123,14 @@ new #[Title('Owners')] class extends Component {
         $this->billingVariableFeeCapOverride = $this->formatOverride($owner->setting('billing.variable_fee_cap_override'));
         $this->billingNotes = (string) $owner->setting('billing.notes', '');
 
+        $this->showBilling = true;
         $this->resetValidation();
     }
 
     public function closeBilling(): void
     {
         $this->reset([
+            'showBilling',
             'editingBillingId',
             'billingOwnerName',
             'billingPartnerId',
@@ -315,13 +328,15 @@ new #[Title('Owners')] class extends Component {
     </x-panel>
 
     {{--
-        Modal content is gated on the primitive `editingBillingId`, not on a
-        computed property. Flux teleports the modal to the DOM body and may
-        open it before the Livewire re-render lands; a computed re-query at
-        that instant would return null and paint an empty modal.
+        Modal binds to a dedicated boolean (`showBilling`), never to
+        `editingBillingId`. Flux's `<ui-modal>` treats its wire:model as an
+        open/closed flag and syncs a boolean back through it on close — binding
+        an `?int` there let `true` coerce to `1` and target the wrong org on
+        save. Content is still gated on `editingBillingId` so a stale open
+        without state never paints an empty form.
     --}}
-    <flux:modal wire:model.self="editingBillingId" @close="$wire.closeBilling()" class="md:w-[36rem]">
-        @if ($editingBillingId !== null)
+    <flux:modal wire:model.self="showBilling" @close="$wire.closeBilling()" class="md:w-[36rem]">
+        @if ($showBilling && $editingBillingId !== null)
             <form wire:submit.prevent="saveBilling" class="space-y-5">
                 <div>
                     <flux:heading size="lg">Billing plan</flux:heading>

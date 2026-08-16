@@ -85,15 +85,12 @@ class DeleteOrganization extends Command
                 ->whereIn('site_id', $siteIds)->count(),
             'shop organizations' => $shopOrgs->count(),
             'shop users' => $shopUserCount,
-            'invoices (org + sites + shops)' => Invoice::query()
-                ->where(function ($q) use ($org, $shopOrgs) {
-                    $q->where(function ($qq) use ($org) {
-                        $qq->where('billable_type', Organization::class)->where('billable_id', $org->id);
-                    })->orWhere(function ($qq) use ($shopOrgs) {
-                        $qq->where('billable_type', Organization::class)->whereIn('billable_id', $shopOrgs->pluck('id'));
-                    });
-                })
-                ->orWhereIn('site_id', $siteIds)
+            // Invoices are polymorphic (billable = owner org or shop org).
+            // site_id lives on invoice_lines, not on the invoice itself, so
+            // there's nothing to filter by site here.
+            'invoices (org + shops)' => Invoice::query()
+                ->where('billable_type', Organization::class)
+                ->whereIn('billable_id', $shopOrgs->pluck('id')->push($org->id))
                 ->count(),
         ];
 
@@ -121,18 +118,15 @@ class DeleteOrganization extends Command
         }
 
         try {
-            DB::transaction(function () use ($org, $siteIds, $shopOrgs, $renameUser, $renameUserTo, $renameUserPassword): void {
-                // 1. Invoices — polymorphic billable has no FK, and site_id is
-                //    nullOnDelete which would leave orphans. Wipe them first.
+            DB::transaction(function () use ($org, $shopOrgs, $renameUser, $renameUserTo, $renameUserPassword): void {
+                // 1. Invoices — polymorphic billable has no FK, so we clear
+                //    invoices for both the parent org and its shop children
+                //    before the orgs go away. invoice_lines cascade off
+                //    invoice_id, so lines vanish with their parent invoice.
+                $invoiceIds = $shopOrgs->pluck('id')->push($org->id);
                 $invoiceDeleted = Invoice::query()
-                    ->where(function ($q) use ($org, $shopOrgs) {
-                        $q->where(function ($qq) use ($org) {
-                            $qq->where('billable_type', Organization::class)->where('billable_id', $org->id);
-                        })->orWhere(function ($qq) use ($shopOrgs) {
-                            $qq->where('billable_type', Organization::class)->whereIn('billable_id', $shopOrgs->pluck('id'));
-                        });
-                    })
-                    ->orWhereIn('site_id', $siteIds)
+                    ->where('billable_type', Organization::class)
+                    ->whereIn('billable_id', $invoiceIds)
                     ->delete();
                 $this->components->info("Deleted {$invoiceDeleted} invoice(s)");
 

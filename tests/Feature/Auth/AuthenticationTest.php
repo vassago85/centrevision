@@ -34,6 +34,22 @@ class AuthenticationTest extends TestCase
         $this->assertAuthenticated();
     }
 
+    public function test_platform_admins_land_on_platform_overview_after_login(): void
+    {
+        $user = User::factory()->platformAdmin()->create();
+
+        $response = $this->post(route('login.store'), [
+            'email' => $user->email,
+            'password' => 'password',
+        ]);
+
+        $response
+            ->assertSessionHasNoErrors()
+            ->assertRedirect(route('platform.overview', absolute: false));
+
+        $this->assertAuthenticated();
+    }
+
     public function test_users_can_not_authenticate_with_invalid_password(): void
     {
         $user = User::factory()->create();

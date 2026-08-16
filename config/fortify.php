@@ -73,6 +73,10 @@ return [
     |
     */
 
+    // Fallback landing page — used by email verification and password reset.
+    // Login itself picks its target per-role via App\Http\Responses\LoginResponse
+    // (bound in FortifyServiceProvider), so a platform admin lands on /platform
+    // instead of the owner dashboard.
     'home' => '/overview',
 
     /*

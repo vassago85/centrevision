@@ -49,6 +49,14 @@ return [
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 
+        // Reads its credentials from config('services.mailgun') — domain,
+        // secret and endpoint — which PlatformSettingsServiceProvider
+        // populates from the platform admin UI. Without this entry, picking
+        // "Mailgun" in the UI throws "Mailer [mailgun] is not defined."
+        'mailgun' => [
+            'transport' => 'mailgun',
+        ],
+
         'ses' => [
             'transport' => 'ses',
         ],

@@ -27,7 +27,10 @@ class TransferAccountOwnership extends Command
         {--to-email= : Email of the new Owner admin (must not already exist)}
         {--to-password= : Password for the new Owner admin}
         {--org-name= : Optional new name for the organization}
-        {--keep-from : Do not delete the departing user; leave them in place as-is}';
+        {--keep-from : Do not delete the departing user; leave them in place as-is}
+        {--rename-user= : Email of an unrelated user (typically the platform admin) to update in the same transaction}
+        {--rename-user-to= : New email for the --rename-user user (needs --rename-user)}
+        {--rename-user-password= : Optional new password for the --rename-user user}';
 
     protected $description = 'Transfer an organization to a new Owner admin and (optionally) delete the previous one';
 
@@ -39,6 +42,9 @@ class TransferAccountOwnership extends Command
         $toPassword = (string) $this->option('to-password');
         $orgName = $this->option('org-name');
         $keepFrom = (bool) $this->option('keep-from');
+        $renameUser = (string) $this->option('rename-user');
+        $renameUserTo = (string) $this->option('rename-user-to');
+        $renameUserPassword = (string) $this->option('rename-user-password');
 
         foreach (['from' => $fromEmail, 'to-name' => $toName, 'to-email' => $toEmail, 'to-password' => $toPassword] as $flag => $value) {
             if ($value === '') {
@@ -48,8 +54,14 @@ class TransferAccountOwnership extends Command
             }
         }
 
+        if ($renameUser !== '' && $renameUserTo === '' && $renameUserPassword === '') {
+            $this->components->error('--rename-user needs at least --rename-user-to or --rename-user-password');
+
+            return self::FAILURE;
+        }
+
         try {
-            DB::transaction(function () use ($fromEmail, $toName, $toEmail, $toPassword, $orgName, $keepFrom): void {
+            DB::transaction(function () use ($fromEmail, $toName, $toEmail, $toPassword, $orgName, $keepFrom, $renameUser, $renameUserTo, $renameUserPassword): void {
                 $from = User::query()->where('email', $fromEmail)->first();
 
                 if ($from === null) {
@@ -92,6 +104,37 @@ class TransferAccountOwnership extends Command
                 if (! $keepFrom) {
                     $from->delete();
                     $this->components->info("Deleted departing user {$fromEmail}");
+                }
+
+                // Optional: rename / reset password on a completely separate
+                // user in the same transaction. The typical case is renaming
+                // the platform admin to the departing owner's now-freed email
+                // so a single human still has one login they recognise.
+                if ($renameUser !== '') {
+                    $target = User::query()->where('email', $renameUser)->first();
+
+                    if ($target === null) {
+                        throw new RuntimeException("--rename-user {$renameUser} not found");
+                    }
+
+                    $updates = [];
+
+                    if ($renameUserTo !== '' && $renameUserTo !== $target->email) {
+                        if (User::query()->where('email', $renameUserTo)->exists()) {
+                            throw new RuntimeException("Cannot rename {$renameUser} to {$renameUserTo} — email already in use");
+                        }
+                        $updates['email'] = $renameUserTo;
+                    }
+
+                    if ($renameUserPassword !== '') {
+                        $updates['password'] = $renameUserPassword;
+                    }
+
+                    if ($updates !== []) {
+                        $target->update($updates);
+                        $changed = implode(', ', array_keys($updates));
+                        $this->components->info("Updated {$renameUser} ({$changed})");
+                    }
                 }
 
                 $this->line('');

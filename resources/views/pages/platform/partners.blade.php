@@ -2,10 +2,12 @@
 
 use App\Enums\PayoutStatus;
 use App\Jobs\GeneratePartnerPayouts;
+use App\Models\Organization;
 use App\Models\Partner;
 use App\Models\PartnerPayout;
 use Flux\Flux;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -182,6 +184,86 @@ new #[Title('Partners')] class extends Component {
         Flux::toast(variant: 'success', text: $message);
     }
 
+    /**
+     * Blast radius of a delete on the partner currently in the editor.
+     * Returned as a plain array so it composes cleanly into the wire:confirm
+     * string in the Blade template. The three numbers cover everything the
+     * FKs will touch: attributed owners get their pointer nulled, and every
+     * payout row is dropped via cascadeOnDelete.
+     *
+     * @return array{owners: int, payouts: int, paid_total: float, pending_total: float}
+     */
+    #[Computed]
+    public function deleteImpact(): array
+    {
+        $empty = ['owners' => 0, 'payouts' => 0, 'paid_total' => 0.0, 'pending_total' => 0.0];
+
+        if ($this->editingPartnerId === null) {
+            return $empty;
+        }
+
+        $partner = Partner::query()->find($this->editingPartnerId);
+
+        if ($partner === null) {
+            return $empty;
+        }
+
+        return [
+            'owners' => $partner->organizations()->count(),
+            'payouts' => $partner->payouts()->count(),
+            'paid_total' => (float) $partner->payouts()->where('status', PayoutStatus::Paid)->sum('commission_amount'),
+            'pending_total' => (float) $partner->payouts()->where('status', PayoutStatus::Pending)->sum('commission_amount'),
+        ];
+    }
+
+    /**
+     * Remove the partner and everything the FKs let go of:
+     *  - `organizations.referred_by_partner_id` → nulled by nullOnDelete, so
+     *    attributed owners stay put and just lose their referrer badge.
+     *  - `partner_payouts` → cascaded by the migration, so historical rows
+     *    disappear. The confirmation upstream in the template spells this out
+     *    with concrete counts pulled from `deleteImpact`.
+     *
+     * Wrapped in a transaction so a partial failure (e.g. an unrelated FK
+     * added later) rolls both operations back rather than leaving orphaned
+     * attributions.
+     */
+    public function deletePartner(): void
+    {
+        if ($this->editingPartnerId === null) {
+            $this->closePartner();
+
+            return;
+        }
+
+        $partner = Partner::query()->find($this->editingPartnerId);
+
+        if ($partner === null) {
+            Flux::toast(variant: 'danger', text: 'That partner no longer exists.');
+            $this->closePartner();
+
+            return;
+        }
+
+        $name = $partner->name;
+
+        DB::transaction(function () use ($partner): void {
+            // Explicit null-out on the owner side even though the FK already
+            // handles it — keeps the intent obvious in a code search and
+            // makes the operation portable if the migration ever changes.
+            Organization::query()
+                ->where('referred_by_partner_id', $partner->getKey())
+                ->update(['referred_by_partner_id' => null]);
+
+            $partner->delete();
+        });
+
+        unset($this->partners, $this->payouts, $this->deleteImpact);
+        $this->closePartner();
+
+        Flux::toast(variant: 'success', text: "Partner {$name} deleted.");
+    }
+
     protected function formatPercent(float $rate): string
     {
         $percent = $rate * 100;
@@ -328,11 +410,49 @@ new #[Title('Partners')] class extends Component {
                     />
                 </div>
 
-                <div class="flex justify-end gap-2">
-                    <flux:button variant="ghost" type="button" wire:click="closePartner">Cancel</flux:button>
-                    <flux:button variant="primary" type="submit">
-                        {{ $editingPartnerId !== null ? 'Save changes' : 'Add partner' }}
-                    </flux:button>
+                <div class="flex items-center justify-between gap-2">
+                    <div>
+                        @if ($editingPartnerId !== null)
+                            @php
+                                $impact = $this->deleteImpact;
+                                // Build a plain-text confirm the browser will
+                                // render in a native alert. Only mention the
+                                // pieces that actually have something at stake
+                                // so short-attention-span reads still land on
+                                // the destructive bit.
+                                $lines = ["Delete partner \"{$partnerName}\"?"];
+                                if ($impact['owners'] > 0) {
+                                    $lines[] = '';
+                                    $lines[] = $impact['owners'] === 1
+                                        ? '1 owner is currently attributed to this partner — their referrer will be cleared.'
+                                        : "{$impact['owners']} owners are currently attributed — their referrer will be cleared.";
+                                }
+                                if ($impact['payouts'] > 0) {
+                                    $lines[] = '';
+                                    $lines[] = $impact['payouts'] === 1
+                                        ? '1 payout record will be permanently deleted:'
+                                        : "{$impact['payouts']} payout records will be permanently deleted:";
+                                    $lines[] = '  Paid to date:  R'.number_format($impact['paid_total'], 2);
+                                    $lines[] = '  Pending:       R'.number_format($impact['pending_total'], 2);
+                                }
+                                $lines[] = '';
+                                $lines[] = 'This cannot be undone.';
+                                $confirmMessage = implode("\n", $lines);
+                            @endphp
+                            <flux:button
+                                variant="danger"
+                                type="button"
+                                wire:click="deletePartner"
+                                wire:confirm="{{ $confirmMessage }}"
+                            >Delete partner</flux:button>
+                        @endif
+                    </div>
+                    <div class="flex gap-2">
+                        <flux:button variant="ghost" type="button" wire:click="closePartner">Cancel</flux:button>
+                        <flux:button variant="primary" type="submit">
+                            {{ $editingPartnerId !== null ? 'Save changes' : 'Add partner' }}
+                        </flux:button>
+                    </div>
                 </div>
             </form>
         @endif

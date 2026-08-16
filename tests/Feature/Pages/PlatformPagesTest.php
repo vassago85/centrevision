@@ -210,6 +210,56 @@ it('edits an existing partner in place', function () {
     expect((float) $this->partner->fresh()->commission_rate)->toBe(0.25);
 });
 
+it('deletes a partner and clears attributed owners without touching them', function () {
+    // Give the partner some payout history so we can assert the cascade
+    // fires — otherwise a naive delete looks the same as an archive.
+    PartnerPayout::factory()
+        ->for($this->partner)
+        ->create(['status' => PayoutStatus::Paid, 'commission_amount' => 1234.00]);
+
+    $ownerId = $this->owner->id;
+    $partnerId = $this->partner->id;
+
+    Livewire::test('pages::platform.partners')
+        ->call('openPartner', $partnerId)
+        ->call('deletePartner')
+        ->assertSet('showPartner', false)
+        ->assertSet('editingPartnerId', null);
+
+    expect(Partner::find($partnerId))->toBeNull()
+        ->and(PartnerPayout::where('partner_id', $partnerId)->count())->toBe(0)
+        // Owner survives — only the referrer pointer is cleared.
+        ->and(Organization::find($ownerId))->not->toBeNull()
+        ->and(Organization::find($ownerId)->referred_by_partner_id)->toBeNull();
+});
+
+it('surfaces the delete impact for the confirm dialog', function () {
+    // Two payouts in different months so we don't trip the
+    // (partner_id, period_start, period_end) unique constraint.
+    PartnerPayout::factory()->for($this->partner)->create([
+        'status' => PayoutStatus::Paid,
+        'commission_amount' => 500.00,
+        'period_start' => '2026-05-01',
+        'period_end' => '2026-05-31',
+    ]);
+    PartnerPayout::factory()->for($this->partner)->create([
+        'status' => PayoutStatus::Pending,
+        'commission_amount' => 250.00,
+        'period_start' => '2026-06-01',
+        'period_end' => '2026-06-30',
+    ]);
+
+    $component = Livewire::test('pages::platform.partners')
+        ->call('openPartner', $this->partner->id);
+
+    $impact = $component->instance()->deleteImpact;
+
+    expect($impact['owners'])->toBe(1)
+        ->and($impact['payouts'])->toBe(2)
+        ->and($impact['paid_total'])->toBe(500.0)
+        ->and($impact['pending_total'])->toBe(250.0);
+});
+
 it('assigns a partner to an owner from the edit-billing modal', function () {
     Livewire::test('pages::platform.owners')
         ->call('openBilling', $this->other->id)

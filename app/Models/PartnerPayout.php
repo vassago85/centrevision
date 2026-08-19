@@ -38,7 +38,7 @@ class PartnerPayout extends Model
             'period_start' => 'date',
             'period_end' => 'date',
             'revenue_base' => 'decimal:2',
-            'commission_rate' => 'decimal:4',
+            'commission_rate' => 'decimal:6',
             'commission_amount' => 'decimal:2',
             'status' => PayoutStatus::class,
             'paid_at' => 'datetime',

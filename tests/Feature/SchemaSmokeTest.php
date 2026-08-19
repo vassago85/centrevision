@@ -127,6 +127,7 @@ it('supports the billing and partner tables', function () {
 
     $siteSub = SiteSubscription::factory()->tier(BaseTier::Standard)->cappedAt(2500)->create([
         'site_id' => $site->id,
+        'partner_id' => $partner->id,
     ]);
     $shopSub = ShopSubscription::factory()->create(['organization_id' => $shop->id]);
 
@@ -135,6 +136,7 @@ it('supports the billing and partner tables', function () {
     expect($siteSub->base_tier)->toBe(BaseTier::Standard)
         ->and((float) $siteSub->base_fee)->toBe(3200.00)
         ->and((float) $siteSub->variable_fee_cap)->toBe(2500.00)
+        ->and($siteSub->partner_id)->toBe($partner->id)
         ->and($site->subscription->is($siteSub))->toBeTrue()
         ->and($shop->shopSubscription->is($shopSub))->toBeTrue()
         ->and($invitation->isPending())->toBeTrue()

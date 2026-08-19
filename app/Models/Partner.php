@@ -28,8 +28,17 @@ class Partner extends Model
     protected function casts(): array
     {
         return [
-            'commission_rate' => 'decimal:4',
+            'commission_rate' => 'decimal:6',
         ];
+    }
+
+    /**
+     * What this partner is owed of an invoiced amount, using their split.
+     * Stephan's 1/3 deal is stored as 0.333333 so R1,500 rounds to R500.
+     */
+    public function shareOf(float $amount): float
+    {
+        return round($amount * (float) $this->commission_rate, 2);
     }
 
     /**
@@ -49,5 +58,16 @@ class Partner extends Model
     public function payouts(): HasMany
     {
         return $this->hasMany(PartnerPayout::class);
+    }
+
+    /**
+     * Sites whose handshake names this partner, independent of which owner
+     * they sit under.
+     *
+     * @return HasMany<SiteSubscription, $this>
+     */
+    public function siteSubscriptions(): HasMany
+    {
+        return $this->hasMany(SiteSubscription::class);
     }
 }

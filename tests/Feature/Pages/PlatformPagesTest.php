@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\BaseTier;
 use App\Enums\InvoiceStatus;
 use App\Enums\PayoutStatus;
 use App\Models\Camera;
@@ -8,6 +7,7 @@ use App\Models\Invoice;
 use App\Models\Organization;
 use App\Models\Partner;
 use App\Models\PartnerPayout;
+use App\Models\Scopes\SiteScope;
 use App\Models\ShopSubscription;
 use App\Models\Site;
 use App\Models\SiteSubscription;
@@ -34,7 +34,7 @@ beforeEach(function () {
     $this->other = Organization::factory()->owner()->create(['name' => 'Owner B']);
     $otherSite = Site::factory()->for_($this->other)->create();
     Camera::factory()->count(6)->for($otherSite)->create();
-    SiteSubscription::factory()->for($otherSite)->tier(BaseTier::Standard)->pastDue()->create();
+    SiteSubscription::factory()->for($otherSite)->pastDue()->create();
 
     $this->admin = actingAsTenant(User::factory()->platformAdmin()->create());
 });
@@ -161,6 +161,22 @@ it('badges free and custom plans in the owners table', function () {
         ->assertSee('Custom');
 });
 
+it('stores a one-third partner share at enough precision to split R1500 into R500', function () {
+    Livewire::test('pages::platform.partners')
+        ->call('openPartner')
+        ->set('partnerName', 'Stephan van der Merwe')
+        ->set('partnerEmail', 'stephan@zentechiss.co.za')
+        ->set('partnerCommissionPercent', '33.3333')
+        ->call('savePartner')
+        ->assertHasNoErrors();
+
+    $partner = Partner::where('email', 'stephan@zentechiss.co.za')->firstOrFail();
+
+    expect((float) $partner->commission_rate)->toBe(0.333333)
+        ->and($partner->shareOf(1500.00))->toBe(500.00)
+        ->and($partner->shareOf(1860.00))->toBe(620.00);
+});
+
 it('adds a new partner from the platform partners page', function () {
     Livewire::test('pages::platform.partners')
         ->call('openPartner')
@@ -269,6 +285,25 @@ it('assigns a partner to an owner from the edit-billing modal', function () {
         ->assertHasNoErrors();
 
     expect($this->other->fresh()->referred_by_partner_id)->toBe($this->partner->id);
+});
+
+it('lets a platform admin save a per-site agreement', function () {
+    $sitePartner = Partner::factory()->create(['name' => 'Stephan Installs']);
+
+    Livewire::test('pages::platform.owners')
+        ->call('openBilling', $this->owner->id)
+        ->set('billingSites.0.base_fee', '1500')
+        ->set('billingSites.0.partner_id', (string) $sitePartner->id)
+        ->call('saveBilling')
+        ->assertHasNoErrors();
+
+    $subscription = SiteSubscription::query()
+        ->withoutGlobalScope(SiteScope::class)
+        ->where('site_id', $this->site->id)
+        ->firstOrFail();
+
+    expect((float) $subscription->base_fee)->toBe(1500.00)
+        ->and($subscription->partner_id)->toBe($sitePartner->id);
 });
 
 it('clears an owner-partner attribution when the dropdown is set to empty', function () {

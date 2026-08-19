@@ -167,7 +167,7 @@ new #[Title('Partners')] class extends Component {
         $attributes = [
             'name' => trim($data['partnerName']),
             'email' => mb_strtolower(trim($data['partnerEmail'])),
-            'commission_rate' => round(((float) $data['partnerCommissionPercent']) / 100, 4),
+            'commission_rate' => round(((float) $data['partnerCommissionPercent']) / 100, 6),
         ];
 
         if ($existing !== null) {
@@ -272,7 +272,7 @@ new #[Title('Partners')] class extends Component {
         // fields on the owners page so the input isn't visually noisy.
         return $percent === floor($percent)
             ? (string) (int) $percent
-            : rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
+            : rtrim(rtrim(number_format($percent, 4, '.', ''), '0'), '.');
     }
 }; ?>
 
@@ -304,7 +304,7 @@ new #[Title('Partners')] class extends Component {
                     <td class="border-b border-line py-2 text-ink-2">{{ $partner->email }}</td>
                     <td class="border-b border-line py-2 text-right tabular-nums">{{ $partner->organizations_count }}</td>
                     <td class="border-b border-line py-2 text-right tabular-nums">
-                        {{ number_format((float) $partner->commission_rate * 100, 1) }}%
+                        {{ rtrim(rtrim(number_format((float) $partner->commission_rate * 100, 4, '.', ''), '0'), '.') }}%
                     </td>
                     <td class="border-b border-line py-2 text-right tabular-nums">
                         R{{ number_format((float) $partner->pending_commission, 2) }}
@@ -400,12 +400,12 @@ new #[Title('Partners')] class extends Component {
                     <flux:input
                         wire:model="partnerCommissionPercent"
                         type="number"
-                        step="0.1"
+                        step="0.0001"
                         min="0"
                         max="100"
-                        label="Commission rate (%)"
+                        label="Partner share (%)"
                         placeholder="20"
-                        description="Percentage of the referred owner's monthly platform revenue paid out as commission."
+                        description="Their cut of invoiced business they bring — site fees, extra cameras, shops. You keep the rest. A 1/3 deal is 33.3333."
                         required
                     />
                 </div>

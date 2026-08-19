@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\OrganizationType;
+use App\Models\Scopes\SiteScope;
 use Carbon\CarbonInterface;
 use Database\Factories\OrganizationFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -49,9 +50,10 @@ class Organization extends Model
         // Per-owner billing overrides applied by BillingCalculator. `free`
         // short-circuits every fee (base, camera surcharge, variable, seat)
         // to zero. The three `*_override` values, when set to a positive
-        // number, replace what the site-level SiteSubscription (or the
-        // published tier) would otherwise charge. `notes` is a free-text
-        // reminder shown to platform admins ("6-month pilot for X.").
+        // number, replace the published tier on sites that have no handshake.
+        // A positive SiteSubscription.base_fee is a per-site agreement and
+        // beats these owner-wide numbers. `notes` is a free-text reminder
+        // shown to platform admins ("6-month pilot for X.").
         'billing' => [
             'free' => false,
             'base_fee_override' => null,
@@ -177,7 +179,21 @@ class Organization extends Model
             }
         }
 
-        return false;
+        return $this->hasSiteAgreement();
+    }
+
+    /**
+     * True when any site under this owner has a handshake (a stored
+     * positive base_fee), so the Owners table can badge the row Custom
+     * even when the owner-wide overrides are empty.
+     */
+    public function hasSiteAgreement(): bool
+    {
+        return SiteSubscription::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->whereIn('site_id', $this->sites()->select('id'))
+            ->where('base_fee', '>', 0)
+            ->exists();
     }
 
     /**

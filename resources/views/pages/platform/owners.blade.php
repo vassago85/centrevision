@@ -1,8 +1,12 @@
 <?php
 
 use App\Enums\BaseTier;
+use App\Enums\SubscriptionStatus;
 use App\Models\Organization;
 use App\Models\Partner;
+use App\Models\Scopes\SiteScope;
+use App\Models\Site;
+use App\Models\SiteSubscription;
 use App\Support\Platform\OwnerSummary;
 use App\Support\Platform\PlatformMetrics;
 use Illuminate\Support\Collection;
@@ -62,6 +66,16 @@ new #[Title('Owners')] class extends Component {
     public string $billingNotes = '';
 
     /**
+     * Per-site handshake rows for the billing modal. Each entry is
+     * [id, name, base_fee, partner_id] as strings so empty inputs stay
+     * empty instead of becoming 0. The partner's standing split (e.g. 1/3)
+     * is applied to whatever this site invoices — no per-site rand cut.
+     *
+     * @var array<int, array{id: int, name: string, base_fee: string, partner_id: string}>
+     */
+    public array $billingSites = [];
+
+    /**
      * @return Collection<int, OwnerSummary>
      */
     #[Computed]
@@ -95,7 +109,7 @@ new #[Title('Owners')] class extends Component {
     #[Computed]
     public function availablePartners(): Collection
     {
-        return Partner::query()->orderBy('name')->get(['id', 'name']);
+        return Partner::query()->orderBy('name')->get(['id', 'name', 'commission_rate']);
     }
 
     /**
@@ -122,6 +136,7 @@ new #[Title('Owners')] class extends Component {
         $this->billingVariableRateOverride = $this->formatOverride($owner->setting('billing.variable_rate_override'));
         $this->billingVariableFeeCapOverride = $this->formatOverride($owner->setting('billing.variable_fee_cap_override'));
         $this->billingNotes = (string) $owner->setting('billing.notes', '');
+        $this->billingSites = $this->agreementRowsFor($owner);
 
         $this->showBilling = true;
         $this->resetValidation();
@@ -139,6 +154,7 @@ new #[Title('Owners')] class extends Component {
             'billingVariableRateOverride',
             'billingVariableFeeCapOverride',
             'billingNotes',
+            'billingSites',
         ]);
     }
 
@@ -177,6 +193,10 @@ new #[Title('Owners')] class extends Component {
             'billingVariableRateOverride' => ['nullable', 'numeric', 'min:0', 'max:100000'],
             'billingVariableFeeCapOverride' => ['nullable', 'numeric', 'min:0', 'max:1000000'],
             'billingNotes' => ['nullable', 'string', 'max:1000'],
+            'billingSites' => ['array'],
+            'billingSites.*.id' => ['required', 'integer'],
+            'billingSites.*.base_fee' => ['nullable', 'numeric', 'min:0', 'max:1000000'],
+            'billingSites.*.partner_id' => ['nullable', 'string'],
         ]);
 
         $partnerId = ($data['billingPartnerId'] ?? '') === ''
@@ -204,6 +224,8 @@ new #[Title('Owners')] class extends Component {
             'referred_by_partner_id' => $partnerId,
         ])->save();
 
+        $this->saveSiteAgreements($owner, $data['billingSites'] ?? []);
+
         // Drop the cached rows so the owner's badges and totals refresh in
         // place instead of showing stale figures until the next full reload.
         unset($this->owners, $this->total);
@@ -212,9 +234,85 @@ new #[Title('Owners')] class extends Component {
         Flux::toast(variant: 'success', text: 'Billing plan saved.');
     }
 
+    /**
+     * @return array<int, array{id: int, name: string, base_fee: string, partner_id: string}>
+     */
+    protected function agreementRowsFor(Organization $owner): array
+    {
+        return Site::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->where('organization_id', $owner->getKey())
+            ->orderBy('name')
+            ->with(['subscription' => fn ($query) => $query->withoutGlobalScope(SiteScope::class)])
+            ->get()
+            ->map(fn (Site $site): array => [
+                'id' => $site->getKey(),
+                'name' => (string) $site->name,
+                'base_fee' => $this->formatOverride($site->subscription?->base_fee),
+                'partner_id' => $site->subscription?->partner_id
+                    ? (string) $site->subscription->partner_id
+                    : '',
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    protected function saveSiteAgreements(Organization $owner, array $rows): void
+    {
+        $ownedIds = Site::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->where('organization_id', $owner->getKey())
+            ->pluck('id');
+
+        foreach ($rows as $row) {
+            $siteId = (int) ($row['id'] ?? 0);
+
+            if (! $ownedIds->contains($siteId)) {
+                continue;
+            }
+
+            $site = Site::query()
+                ->withoutGlobalScope(SiteScope::class)
+                ->find($siteId);
+
+            if ($site === null) {
+                continue;
+            }
+
+            $partnerId = ($row['partner_id'] ?? '') === ''
+                ? null
+                : (int) $row['partner_id'];
+
+            if ($partnerId !== null && ! Partner::query()->whereKey($partnerId)->exists()) {
+                $partnerId = null;
+            }
+
+            $subscription = SiteSubscription::query()
+                ->withoutGlobalScope(SiteScope::class)
+                ->firstOrCreate(
+                    ['site_id' => $site->getKey()],
+                    [
+                        'base_tier' => BaseTier::Starter,
+                        'base_fee' => 0,
+                        'variable_rate_per_camera_per_subuser' => (float) config('trafficflow.variable_rate_per_camera_per_subuser'),
+                        'status' => SubscriptionStatus::Active,
+                        'current_period_ends_at' => now()->endOfMonth(),
+                    ],
+                );
+
+            $subscription->forceFill([
+                'base_fee' => $this->parseOverride($row['base_fee'] ?? null) ?? 0,
+                'partner_id' => $partnerId,
+            ])->save();
+        }
+    }
+
     protected function formatOverride(mixed $value): string
     {
-        if ($value === null || $value === '') {
+        if ($value === null || $value === '' || (float) $value <= 0) {
             return '';
         }
 
@@ -335,21 +433,21 @@ new #[Title('Owners')] class extends Component {
         save. Content is still gated on `editingBillingId` so a stale open
         without state never paints an empty form.
     --}}
-    <flux:modal wire:model.self="showBilling" @close="$wire.closeBilling()" class="md:w-[36rem]">
+    <flux:modal wire:model.self="showBilling" @close="$wire.closeBilling()" class="md:w-[42rem]">
         @if ($showBilling && $editingBillingId !== null)
             <form wire:submit.prevent="saveBilling" class="space-y-5">
                 <div>
                     <flux:heading size="lg">Billing plan</flux:heading>
                     <p class="mt-1 text-[13px] text-ink-muted">
-                        Overrides apply to <span class="font-semibold text-ink">{{ $billingOwnerName }}</span> across every site
-                        they run. Leave a field blank to fall back to the tier default.
+                        Owner-wide fields are the fallback for sites without a handshake.
+                        A per-site agreement below wins for that mall only.
                     </p>
                 </div>
 
                 <flux:select
                     wire:model="billingPartnerId"
                     label="Referred by partner"
-                    description="Attributes this owner to an installer / reseller so they earn commission on the monthly total. Manage partners in the Partners tab."
+                    description="Fallback partner for sites without their own handshake. A site agreement below can name a different partner."
                 >
                     <flux:select.option value="">— No partner —</flux:select.option>
 
@@ -404,6 +502,61 @@ new #[Title('Owners')] class extends Component {
                         placeholder="Why this plan? e.g. '6-month pilot until Feb 2027'."
                     />
                 </div>
+
+                @if ($billingSites !== [])
+                    <div class="space-y-3">
+                        <div>
+                            <flux:heading size="sm">Site agreements</flux:heading>
+                            <p class="mt-1 text-[13px] text-ink-muted">
+                                Invoice the handshake total for that site. The site partner is paid their standing split of whatever this site bills — extra cameras and shops included. You keep the rest.
+                            </p>
+                        </div>
+
+                        @foreach ($billingSites as $index => $row)
+                            <div wire:key="agreement-{{ $row['id'] }}" class="space-y-3 rounded-lg border border-line p-4">
+                                <input type="hidden" wire:model="billingSites.{{ $index }}.id">
+                                <p class="font-medium text-ink">{{ $row['name'] }}</p>
+                                <div class="grid gap-3 md:grid-cols-2">
+                                    <flux:input
+                                        wire:model.live="billingSites.{{ $index }}.base_fee"
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        label="Agreement (R / month)"
+                                        placeholder="No handshake"
+                                    />
+                                    <flux:select
+                                        wire:model.live="billingSites.{{ $index }}.partner_id"
+                                        label="Site partner"
+                                    >
+                                        <flux:select.option value="">— No partner —</flux:select.option>
+                                        @foreach ($this->availablePartners as $partner)
+                                            <flux:select.option value="{{ $partner->id }}">{{ $partner->name }}</flux:select.option>
+                                        @endforeach
+                                    </flux:select>
+                                </div>
+                                @php
+                                    $selectedPartner = $this->availablePartners->firstWhere('id', (int) ($row['partner_id'] ?: 0));
+                                    $agreementFee = (float) ($row['base_fee'] ?: 0);
+                                @endphp
+                                @if ($selectedPartner && $agreementFee > 0)
+                                    @php
+                                        $partnerCut = $selectedPartner->shareOf($agreementFee);
+                                        $platformKeep = round($agreementFee - $partnerCut, 2);
+                                        $partnerPct = (float) $selectedPartner->commission_rate * 100;
+                                    @endphp
+                                    <p class="text-[13px] text-ink-muted">
+                                        {{ $selectedPartner->name }} keeps
+                                        {{ rtrim(rtrim(number_format($partnerPct, 4, '.', ''), '0'), '.') }}%
+                                        (R{{ number_format($partnerCut, 2) }})
+                                        · platform keeps R{{ number_format($platformKeep, 2) }}
+                                        of the base. The same split applies to extra cameras and shops.
+                                    </p>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
 
                 <div class="flex justify-end gap-2">
                     <flux:button variant="ghost" type="button" wire:click="closeBilling">Cancel</flux:button>

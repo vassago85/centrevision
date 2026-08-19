@@ -25,6 +25,8 @@ class SiteCharge
         // added part-way through. Kept alongside the charged amounts so the
         // invoice line can label a prorated month as such.
         public readonly float $prorationFactor = 1.0,
+        public readonly ?int $partnerId = null,
+        public readonly float $partnerAmount = 0.0,
     ) {}
 
     public function total(): float
@@ -54,6 +56,8 @@ class SiteCharge
             'paying_shops' => $this->payingShopCount,
             'variable_fee_capped' => $this->wasCapped(),
             'proration_factor' => $this->prorationFactor,
+            'partner_id' => $this->partnerId,
+            'partner_amount' => $this->partnerAmount,
         ];
     }
 }

@@ -25,12 +25,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float $base_fee
  * @property float $variable_rate_per_camera_per_subuser
  * @property float|null $variable_fee_cap
+ * @property int|null $partner_id
+ * @property float $partner_amount
  * @property SubscriptionStatus $status
  * @property CarbonInterface|null $current_period_ends_at
  */
 #[Fillable([
     'site_id', 'base_tier', 'base_fee', 'variable_rate_per_camera_per_subuser',
-    'variable_fee_cap', 'status', 'current_period_ends_at',
+    'variable_fee_cap', 'partner_id', 'partner_amount',
+    'status', 'current_period_ends_at',
     'gateway_customer_id', 'gateway_subscription_id',
 ])]
 #[ScopedBy(SiteScope::class)]
@@ -46,6 +49,7 @@ class SiteSubscription extends Model implements SiteScoped
             'base_fee' => 'decimal:2',
             'variable_rate_per_camera_per_subuser' => 'decimal:2',
             'variable_fee_cap' => 'decimal:2',
+            'partner_amount' => 'decimal:2',
             'status' => SubscriptionStatus::class,
             'current_period_ends_at' => 'datetime',
         ];
@@ -57,6 +61,23 @@ class SiteSubscription extends Model implements SiteScoped
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
+    }
+
+    /**
+     * @return BelongsTo<Partner, $this>
+     */
+    public function partner(): BelongsTo
+    {
+        return $this->belongsTo(Partner::class);
+    }
+
+    /**
+     * A stored positive base_fee is a handshake for this site, not the
+     * published tier price. Empty / zero means "meter this site as usual".
+     */
+    public function hasAgreement(): bool
+    {
+        return (float) $this->base_fee > 0.0;
     }
 
     public function grantsAccess(): bool

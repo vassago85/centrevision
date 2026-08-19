@@ -3,10 +3,14 @@
 use App\Enums\BaseTier;
 use App\Models\Camera;
 use App\Models\Organization;
+use App\Models\Partner;
 use App\Models\ShopSubscription;
 use App\Models\Site;
 use App\Models\SiteSubscription;
+use App\Models\User;
 use App\Support\Billing\BillingCalculator;
+use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\DB;
 
 beforeEach(function () {
     // Sites created part-way through a billing period get prorated by day
@@ -14,7 +18,7 @@ beforeEach(function () {
     // time to the start of a fixed month means every factory-built site is
     // "already alive" when the current period starts, so the tests below can
     // reason about full-month figures without dragging today's date in.
-    \Illuminate\Support\Facades\Date::setTestNow('2026-06-01 00:00:00');
+    Date::setTestNow('2026-06-01 00:00:00');
 
     $this->owner = Organization::factory()->owner()->create();
     $this->site = Site::factory()->for_($this->owner)->create(['name' => 'Mall A']);
@@ -187,7 +191,7 @@ it('re-derives the tier from the live camera count regardless of stored tier', f
     SiteSubscription::factory()
         ->for($this->site)
         ->create([
-            'base_tier' => \App\Enums\BaseTier::Enterprise,
+            'base_tier' => BaseTier::Enterprise,
             'base_fee' => 0,
         ]);
 
@@ -195,7 +199,7 @@ it('re-derives the tier from the live camera count regardless of stored tier', f
 
     $charge = $this->calculator->chargeForSite($this->site);
 
-    expect($charge->tier)->toBe(\App\Enums\BaseTier::Starter)
+    expect($charge->tier)->toBe(BaseTier::Starter)
         ->and($charge->baseFee)->toBe(1800.00);
 });
 
@@ -208,7 +212,7 @@ it('prorates a site added mid-month by the days it was actually live', function 
     $latecomer = Site::factory()->for_($this->owner)->create();
     Camera::factory()->count(3)->for($latecomer)->create();
 
-    \Illuminate\Support\Facades\DB::table('sites')
+    DB::table('sites')
         ->where('id', $latecomer->id)
         ->update(['created_at' => '2026-06-16 00:00:00']);
 
@@ -216,7 +220,7 @@ it('prorates a site added mid-month by the days it was actually live', function 
 
     $charge = $this->calculator->chargeForSite(
         $refreshed,
-        \Illuminate\Support\Facades\Date::parse('2026-06-01'),
+        Date::parse('2026-06-01'),
     );
 
     // 30-day month, site created on the 16th, ~half the base fee.
@@ -230,7 +234,7 @@ it('bills nothing when the site did not yet exist for the requested period', fun
     $futureSite = Site::factory()->for_($this->owner)->create();
     Camera::factory()->count(5)->for($futureSite)->create();
 
-    \Illuminate\Support\Facades\DB::table('sites')
+    DB::table('sites')
         ->where('id', $futureSite->id)
         ->update(['created_at' => '2026-08-05 00:00:00']);
 
@@ -238,7 +242,7 @@ it('bills nothing when the site did not yet exist for the requested period', fun
     // during July.
     $charge = $this->calculator->chargeForSite(
         $futureSite->fresh(),
-        \Illuminate\Support\Facades\Date::parse('2026-07-01'),
+        Date::parse('2026-07-01'),
     );
 
     expect($charge->prorationFactor)->toBe(0.0)
@@ -248,16 +252,16 @@ it('bills nothing when the site did not yet exist for the requested period', fun
 // ── Security operator seats ────────────────────────────────────────────────
 
 it('counts every security operator seat under an owner organization', function () {
-    \App\Models\User::factory()->securityOperator($this->owner)->count(4)->create();
+    User::factory()->securityOperator($this->owner)->count(4)->create();
 
     // A guard in someone else's org must not leak in.
-    \App\Models\User::factory()->securityOperator()->create();
+    User::factory()->securityOperator()->create();
 
     expect($this->calculator->securityOperatorSeatCount($this->owner))->toBe(4);
 });
 
 it('charges the configured seat rate for each operator', function () {
-    \App\Models\User::factory()->securityOperator($this->owner)->count(3)->create();
+    User::factory()->securityOperator($this->owner)->count(3)->create();
 
     $expected = 3 * (float) config('trafficflow.security_operator_monthly_amount');
 
@@ -270,7 +274,7 @@ it('collapses the seat charge to zero when the owner has no operators', function
 
 it('rolls the seat charge into the owner monthly total', function () {
     Camera::factory()->count(3)->for($this->site)->create();
-    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+    User::factory()->securityOperator($this->owner)->count(2)->create();
 
     $seatTotal = 2 * (float) config('trafficflow.security_operator_monthly_amount');
     $siteTotal = $this->calculator->chargeForSite($this->site)->total();
@@ -283,7 +287,7 @@ it('rolls the seat charge into the owner monthly total', function () {
 it('waives every fee for an owner on the free plan', function () {
     Camera::factory()->count(6)->for($this->site)->create();
     payingShops($this->site, 4);
-    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+    User::factory()->securityOperator($this->owner)->count(2)->create();
 
     $this->owner->update(['settings' => ['billing' => ['free' => true]]]);
 
@@ -335,14 +339,56 @@ it('honours a per-owner variable fee cap override', function () {
         ->and($charge->wasCapped())->toBeTrue();
 });
 
-it('prefers a per-owner override over the site-level negotiated fee', function () {
-    Camera::factory()->count(5)->for($this->site)->create();
+it('prefers a site agreement over the per-owner override', function () {
+    Camera::factory()->count(4)->for($this->site)->create();
 
-    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 9000.00]);
+    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 1500.00]);
     $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 2000.00]]]);
 
-    // Owner-level override outranks the site-level negotiated fee.
-    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(2000.00);
+    // A handshake on this site outranks the owner-wide fallback.
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(1500.00);
+});
+
+it('keeps the owner override on sites that have no agreement', function () {
+    Camera::factory()->count(3)->for($this->site)->create();
+
+    $second = Site::factory()->for_($this->owner)->create();
+    Camera::factory()->count(4)->for($second)->create();
+    SiteSubscription::factory()->for($second)->create(['base_fee' => 1500.00]);
+
+    $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 2000.00]]]);
+
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(2000.00)
+        ->and($this->calculator->chargeForSite($second->fresh())->baseFee)->toBe(1500.00);
+});
+
+it('adds the per-camera surcharge above the four cameras an agreement includes', function () {
+    Camera::factory()->count(5)->for($this->site)->create();
+
+    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 1500.00]);
+
+    $charge = $this->calculator->chargeForSite($this->site->fresh());
+
+    expect($charge->baseFee)->toBe(1500.00)
+        ->and($charge->cameraSurcharge)->toBe(BaseTier::ENTERPRISE_PER_CAMERA_FEE)
+        ->and($charge->total())->toBe(1800.00);
+});
+
+it('snapshots the site partner cut from their standing split', function () {
+    $partner = Partner::factory()->thirdShare()->create();
+    Camera::factory()->count(4)->for($this->site)->create();
+
+    SiteSubscription::factory()->for($this->site)->create([
+        'base_fee' => 1500.00,
+        'partner_id' => $partner->id,
+    ]);
+
+    $charge = $this->calculator->chargeForSite($this->site->fresh());
+
+    expect($charge->partnerId)->toBe($partner->id)
+        ->and($charge->partnerAmount)->toBe(500.00)
+        ->and($charge->meta()['partner_id'])->toBe($partner->id)
+        ->and($charge->meta()['partner_amount'])->toBe(500.00);
 });
 
 it('treats a zero override as no override', function () {

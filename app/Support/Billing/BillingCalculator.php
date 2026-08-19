@@ -25,8 +25,11 @@ use Illuminate\Support\Facades\Date;
  * bill just tracks what they actually run. A site's tier is re-derived from
  * its live camera count on every billing pass — Starter up to 4 cameras,
  * Standard to 8, Large to 16, Enterprise beyond, with a per-camera surcharge
- * once the Large ceiling is passed. On top of that, each site pays a variable
- * fee tied to how many paying shops the owner has resold access to.
+ * once the Large ceiling is passed. A positive SiteSubscription.base_fee is
+ * a per-site handshake that beats the owner-wide override and the published
+ * tier; cameras past the Starter ceiling then add the usual per-camera
+ * surcharge. On top of that, each site pays a variable fee tied to how many
+ * paying shops the owner has resold access to.
  *
  * Sites created part-way through a month are prorated by day count so an owner
  * who onboards a mall on the 20th is not billed as if it ran the whole month.
@@ -75,18 +78,20 @@ class BillingCalculator
         }
 
         // Base fee resolution — most specific wins:
-        //   1. Per-owner override (a hand-shaken flat fee that applies to
-        //      every site the owner runs).
-        //   2. Per-site negotiated base_fee on SiteSubscription (typically
-        //      an Enterprise deal on one specific mall).
+        //   1. Per-site agreement (a positive base_fee on SiteSubscription).
+        //      This is the handshake for one mall and must not be stomped by
+        //      an owner-wide override — the next site they add may be priced
+        //      completely differently.
+        //   2. Per-owner override (fallback for sites that have no handshake).
         //   3. Published tier price derived from the camera count.
         $ownerBaseOverride = $this->positiveOverride($owner, 'billing.base_fee_override');
         $negotiatedBase = $subscription !== null ? (float) $subscription->base_fee : 0.0;
+        $hasAgreement = $negotiatedBase > 0.0;
         $publishedBase = $tier->baseFee();
 
         $baseFee = match (true) {
+            $hasAgreement => $negotiatedBase,
             $ownerBaseOverride !== null => $ownerBaseOverride,
-            $negotiatedBase > 0.0 => $negotiatedBase,
             default => $publishedBase,
         };
 
@@ -129,17 +134,18 @@ class BillingCalculator
         $uncapped = round($cameras * $payingShops * $rate, 2);
         $variableFee = $cap === null ? $uncapped : round(min($uncapped, $cap), 2);
 
-        return new SiteCharge(
+        return $this->makeCharge(
             site: $site,
             tier: $tier,
-            cameraCount: $cameras,
-            payingShopCount: $payingShops,
+            cameras: $cameras,
+            payingShops: $payingShops,
             baseFee: round($baseFee * $factor, 2),
-            cameraSurcharge: round($this->cameraSurcharge($tier, $cameras) * $factor, 2),
+            cameraSurcharge: round($this->cameraSurcharge($tier, $cameras, $hasAgreement) * $factor, 2),
             variableFee: round($variableFee * $factor, 2),
-            uncappedVariableFee: round($uncapped * $factor, 2),
-            variableFeeCap: $cap,
-            prorationFactor: $factor,
+            uncapped: round($uncapped * $factor, 2),
+            cap: $cap,
+            factor: $factor,
+            subscription: $subscription,
         );
     }
 
@@ -244,18 +250,67 @@ class BillingCalculator
     }
 
     /**
-     * Enterprise sites pay per camera above the Large ceiling; every other
-     * tier is flat.
+     * Extra cameras beyond the included ceiling. Metered sites only surcharge
+     * once they are Enterprise (above the Large ceiling of 16). A handshake
+     * is priced for Starter capacity — four cameras — so the fifth and up
+     * use the same per-camera fee on top of the agreed base.
      */
-    protected function cameraSurcharge(BaseTier $tier, int $cameras): float
+    protected function cameraSurcharge(BaseTier $tier, int $cameras, bool $hasAgreement = false): float
     {
-        $threshold = $tier->perCameraSurchargeAbove();
+        $threshold = $hasAgreement
+            ? BaseTier::Starter->cameraCeiling()
+            : $tier->perCameraSurchargeAbove();
 
         if ($threshold === null || $cameras <= $threshold) {
             return 0.0;
         }
 
         return round(($cameras - $threshold) * BaseTier::ENTERPRISE_PER_CAMERA_FEE, 2);
+    }
+
+    /**
+     * Stamp the site partner onto the charge so invoice lines (and later
+     * payouts) see the handshake that was in force when the month was billed.
+     */
+    protected function makeCharge(
+        Site $site,
+        BaseTier $tier,
+        int $cameras,
+        int $payingShops,
+        float $baseFee,
+        float $cameraSurcharge,
+        float $variableFee,
+        float $uncapped,
+        ?float $cap,
+        float $factor,
+        ?SiteSubscription $subscription,
+    ): SiteCharge {
+        $partnerId = null;
+        $partnerAmount = 0.0;
+
+        if ($subscription?->partner_id) {
+            $partnerId = $subscription->partner_id;
+            $partner = $subscription->partner;
+
+            if ($partner !== null) {
+                $partnerAmount = $partner->shareOf($baseFee);
+            }
+        }
+
+        return new SiteCharge(
+            site: $site,
+            tier: $tier,
+            cameraCount: $cameras,
+            payingShopCount: $payingShops,
+            baseFee: $baseFee,
+            cameraSurcharge: $cameraSurcharge,
+            variableFee: $variableFee,
+            uncappedVariableFee: $uncapped,
+            variableFeeCap: $cap,
+            prorationFactor: $factor,
+            partnerId: $partnerId,
+            partnerAmount: $partnerAmount,
+        );
     }
 
     /**
@@ -336,6 +391,7 @@ class BillingCalculator
     {
         return SiteSubscription::query()
             ->withoutGlobalScope(SiteScope::class)
+            ->with('partner')
             ->where('site_id', $site->getKey())
             ->first();
     }

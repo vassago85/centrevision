@@ -6,8 +6,11 @@ use App\Jobs\GenerateMonthlyInvoices;
 use App\Models\Camera;
 use App\Models\Invoice;
 use App\Models\Organization;
+use App\Models\Partner;
 use App\Models\ShopSubscription;
 use App\Models\Site;
+use App\Models\SiteSubscription;
+use App\Models\User;
 use App\Support\Billing\InvoiceBuilder;
 use Illuminate\Support\Facades\Date;
 
@@ -56,6 +59,24 @@ it('shows the variable fee working on the line', function () {
     expect($line->label)->toContain('3 cameras × 1 shops')
         ->and((float) $line->amount)->toBe(54.00)
         ->and($line->meta['paying_shops'])->toBe(1);
+});
+
+it('snapshots a site-agreement partner onto the base-fee line', function () {
+    $partner = Partner::factory()->thirdShare()->create();
+
+    SiteSubscription::factory()->for($this->siteA)->create([
+        'base_fee' => 1500.00,
+        'partner_id' => $partner->id,
+    ]);
+
+    $line = $this->builder->forOwner($this->owner, $this->period)
+        ->lines
+        ->where('kind', InvoiceLineKind::BaseFee)
+        ->firstWhere('site_id', $this->siteA->id);
+
+    expect((float) $line->amount)->toBe(1500.00)
+        ->and($line->meta['partner_id'])->toBe($partner->id)
+        ->and((float) $line->meta['partner_amount'])->toBe(500.00);
 });
 
 it('adds a camera surcharge line only when the site is over the ceiling', function () {
@@ -133,7 +154,7 @@ it('is safe to run the monthly job twice', function () {
 it('appends a security operator seats line and adds it to the invoice total', function () {
     // Two operators × the configured seat rate is a flat added charge that
     // does not multiply with cameras or shops.
-    \App\Models\User::factory()->securityOperator($this->owner)->count(2)->create();
+    User::factory()->securityOperator($this->owner)->count(2)->create();
 
     $rate = (float) config('trafficflow.security_operator_monthly_amount');
 

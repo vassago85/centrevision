@@ -21,9 +21,14 @@ class SiteSubscriptionFactory extends Factory
         return [
             'site_id' => Site::factory(),
             'base_tier' => BaseTier::Starter,
-            'base_fee' => BaseTier::Starter->baseFee(),
+            // Zero means "no handshake" — BillingCalculator then uses the
+            // published tier (or an owner-wide override). A positive base_fee
+            // is a per-site agreement.
+            'base_fee' => 0,
             'variable_rate_per_camera_per_subuser' => config('trafficflow.variable_rate_per_camera_per_subuser'),
             'variable_fee_cap' => null,
+            'partner_id' => null,
+            'partner_amount' => 0,
             'status' => SubscriptionStatus::Active,
             'current_period_ends_at' => now()->endOfMonth(),
         ];

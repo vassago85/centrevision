@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\InvoiceLineKind;
 use App\Enums\PayoutStatus;
 use App\Jobs\GeneratePartnerPayouts;
 use App\Models\Invoice;
@@ -116,4 +117,93 @@ it('bills the month just finished when run unattended', function () {
     (new GeneratePartnerPayouts)->handle();
 
     expect(PartnerPayout::sole()->period_start->toDateString())->toBe('2026-07-01');
+});
+
+it('pays a site-agreement partner their standing split of the base fee', function () {
+    $sitePartner = Partner::factory()->thirdShare()->create();
+
+    $invoice = paidInvoice($this->owner, 1500.00);
+    $invoice->lines()->create([
+        'site_id' => $this->site->id,
+        'kind' => InvoiceLineKind::BaseFee,
+        'label' => 'Mall — base fee',
+        'amount' => 1500.00,
+        'meta' => ['partner_id' => $sitePartner->id],
+    ]);
+
+    (new GeneratePartnerPayouts('2026-07-01'))->handle();
+
+    $payout = PartnerPayout::query()->where('partner_id', $sitePartner->id)->sole();
+
+    expect((float) $payout->revenue_base)->toBe(1500.00)
+        ->and((float) $payout->commission_amount)->toBe(500.00)
+        ->and((float) PartnerPayout::query()->where('partner_id', $this->partner->id)->value('commission_amount'))
+        ->toBe(0.0);
+});
+
+it('applies the same split to extra metered lines', function () {
+    $sitePartner = Partner::factory()->thirdShare()->create();
+
+    $invoice = paidInvoice($this->owner, 1860.00);
+    $invoice->lines()->createMany([
+        [
+            'site_id' => $this->site->id,
+            'kind' => InvoiceLineKind::BaseFee,
+            'label' => 'Mall — base fee',
+            'amount' => 1500.00,
+            'meta' => ['partner_id' => $sitePartner->id],
+        ],
+        [
+            'site_id' => $this->site->id,
+            'kind' => InvoiceLineKind::CameraSurcharge,
+            'label' => 'Mall — additional cameras',
+            'amount' => 300.00,
+            'meta' => ['partner_id' => $sitePartner->id],
+        ],
+        [
+            'site_id' => $this->site->id,
+            'kind' => InvoiceLineKind::VariableFee,
+            'label' => 'Mall — shops',
+            'amount' => 60.00,
+            'meta' => ['partner_id' => $sitePartner->id],
+        ],
+    ]);
+
+    (new GeneratePartnerPayouts('2026-07-01'))->handle();
+
+    $payout = PartnerPayout::query()->where('partner_id', $sitePartner->id)->sole();
+
+    // 1/3 of R1,500 + R300 + R60.
+    expect((float) $payout->revenue_base)->toBe(1860.00)
+        ->and((float) $payout->commission_amount)->toBe(620.00);
+});
+
+it('can split two sites on the same owner across different partners', function () {
+    $sitePartner = Partner::factory()->thirdShare()->create();
+    $other = Site::factory()->for_($this->owner)->create();
+
+    $invoice = paidInvoice($this->owner, 4500.00);
+    $invoice->lines()->createMany([
+        [
+            'site_id' => $this->site->id,
+            'kind' => InvoiceLineKind::BaseFee,
+            'label' => 'Site A',
+            'amount' => 1500.00,
+            'meta' => ['partner_id' => $sitePartner->id],
+        ],
+        [
+            'site_id' => $other->id,
+            'kind' => InvoiceLineKind::BaseFee,
+            'label' => 'Site B',
+            'amount' => 3000.00,
+            'meta' => [],
+        ],
+    ]);
+
+    (new GeneratePartnerPayouts('2026-07-01'))->handle();
+
+    expect((float) PartnerPayout::query()->where('partner_id', $sitePartner->id)->value('commission_amount'))
+        ->toBe(500.00)
+        ->and((float) PartnerPayout::query()->where('partner_id', $this->partner->id)->value('commission_amount'))
+        ->toBe(600.00);
 });

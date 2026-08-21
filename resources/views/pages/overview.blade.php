@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\WatchlistKind;
+use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Scopes\SiteScope;
 use App\Models\Visit;
@@ -31,6 +32,14 @@ new #[Title('Dashboard')] class extends Component
     public bool $excludeHolidays = false;
 
     /**
+     * Optional camera filter for the plate-level "Latest activity" card.
+     * Aggregate KPIs and charts stay site-wide — shoppers-per-camera is
+     * useful, but a return-rate that changes when you flip cameras isn't.
+     */
+    #[Url(as: 'camera', keep: true)]
+    public ?int $cameraId = null;
+
+    /**
      * Platform admins have no site of their own to show, so send them to the
      * cross-tenant view they actually landed here looking for.
      */
@@ -42,6 +51,54 @@ new #[Title('Dashboard')] class extends Component
 
         if (! array_key_exists($this->rangeKey, DateRange::options())) {
             $this->rangeKey = '7d';
+        }
+
+        $this->normaliseCameraId();
+    }
+
+    public function updatedCameraId(): void
+    {
+        $this->normaliseCameraId();
+    }
+
+    /**
+     * Active cameras of the current site — used to render the Latest
+     * activity filter. Empty for shops (no plate-level UI to filter) and
+     * for the "all sites" view where a single camera list would be
+     * meaningless across tenants.
+     *
+     * @return Collection<int, Camera>
+     */
+    #[Computed]
+    public function cameras(): Collection
+    {
+        $site = app(Tenancy::class)->currentSite();
+
+        if ($site === null || ! $this->canSeePlates()) {
+            return collect();
+        }
+
+        return Camera::query()
+            ->where('site_id', $site->getKey())
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    #[Computed]
+    public function hasMultipleCameras(): bool
+    {
+        return $this->cameras->count() > 1;
+    }
+
+    protected function normaliseCameraId(): void
+    {
+        if ($this->cameraId === null) {
+            return;
+        }
+
+        if (! $this->cameras->contains('id', $this->cameraId)) {
+            $this->cameraId = null;
         }
     }
 
@@ -530,7 +587,7 @@ new #[Title('Dashboard')] class extends Component
         }
 
         return $this->analytics()
-            ->recentDetections(8)
+            ->recentDetections(8, $this->cameraId)
             ->each(fn (PlateEvent $e) => $e->makeVisible('plate_number'));
     }
 
@@ -857,7 +914,7 @@ new #[Title('Dashboard')] class extends Component
          in twice appears twice — the visit-backed version hid re-entries
          inside the still-open first visit and made the timestamps look stale.
          Owner-only, and only rendered when we actually have plates. --}}
-    @if ($this->canSeePlates && $this->latestEntries->isNotEmpty())
+    @if ($this->canSeePlates && ($this->latestEntries->isNotEmpty() || $this->cameraId !== null))
     <div class="mb-6">
         <x-panel-card>
             <x-slot:header>
@@ -870,9 +927,28 @@ new #[Title('Dashboard')] class extends Component
                         <p class="text-[11.5px] text-ink-muted">Most recent camera detections</p>
                     </div>
                 </div>
-                <a href="{{ route('reports') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
+                <div class="flex items-center gap-2">
+                    @if ($this->hasMultipleCameras)
+                        <flux:select
+                            wire:model.live="cameraId"
+                            size="sm"
+                            class="min-w-40"
+                            label="Camera"
+                            label:sr-only
+                        >
+                            <flux:select.option :value="null">All cameras</flux:select.option>
+                            @foreach ($this->cameras as $camera)
+                                <flux:select.option :value="$camera->id">{{ $camera->name }}</flux:select.option>
+                            @endforeach
+                        </flux:select>
+                    @endif
+                    <a href="{{ route('activity') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
+                </div>
             </x-slot:header>
 
+            @if ($this->latestEntries->isEmpty())
+                <x-placeholder>No detections for this camera yet.</x-placeholder>
+            @else
             <table class="w-full text-[13px]">
                 <thead>
                     <tr class="text-left text-[11px] uppercase tracking-[0.14em] text-ink-muted">
@@ -939,6 +1015,7 @@ new #[Title('Dashboard')] class extends Component
                     @endforeach
                 </tbody>
             </table>
+            @endif
         </x-panel-card>
     </div>
     @endif

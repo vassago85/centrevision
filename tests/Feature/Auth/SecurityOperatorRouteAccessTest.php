@@ -23,7 +23,7 @@ beforeEach(function () {
 it('lets an operator hit the pages they need to do their job', function () {
     $this->actingAs($this->operator);
 
-    foreach (['overview', 'cameras', 'security', 'watchlist', 'reports'] as $route) {
+    foreach (['overview', 'cameras', 'activity', 'security', 'watchlist', 'reports'] as $route) {
         $this->get(route($route))->assertOk();
     }
 });
@@ -40,7 +40,7 @@ it('does not offer sites, shops, billing or settings in the navigation', functio
     $routes = collect(Navigation::for($this->operator))->pluck('route')->all();
 
     expect($routes)
-        ->toContain('overview', 'cameras', 'security', 'watchlist', 'reports')
+        ->toContain('overview', 'cameras', 'activity', 'security', 'watchlist', 'reports')
         ->not->toContain('sites', 'shops', 'billing', 'settings');
 });
 

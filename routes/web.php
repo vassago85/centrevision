@@ -64,6 +64,7 @@ Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
         // the owner's money.
         Route::middleware('role:owner_admin|security_operator')->group(function () {
             Route::livewire('cameras', 'pages::cameras')->name('cameras');
+            Route::livewire('activity', 'pages::activity')->name('activity');
             Route::livewire('security', 'pages::security')->name('security');
             Route::livewire('watchlist', 'pages::watchlist')->name('watchlist');
         });

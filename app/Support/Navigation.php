@@ -48,6 +48,7 @@ class Navigation
             ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
             ['label' => 'Sites', 'route' => 'sites', 'icon' => 'building-office-2'],
             ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera'],
+            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list'],
             // Both Security and Watchlist paint red — they answer the
             // "is something wrong right now?" question, not "how is business?".
             ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger'],
@@ -81,6 +82,7 @@ class Navigation
         return [
             ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
             ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera'],
+            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list'],
             ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger'],
             ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger'],
             ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar'],

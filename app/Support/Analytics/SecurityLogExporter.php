@@ -19,29 +19,46 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class SecurityLogExporter
 {
-    public function streamDay(Site $site, CarbonInterface $date): StreamedResponse
+    /**
+     * Stream the day's plate events as CSV. Passing a camera id narrows
+     * the export to just that camera, so a "download log" click on a
+     * filtered view matches what's on screen. The camera is checked
+     * against the site to keep a tampered id from producing another
+     * tenant's rows.
+     */
+    public function streamDay(Site $site, CarbonInterface $date, ?int $cameraId = null): StreamedResponse
     {
         $start = $date->copy()->startOfDay();
         $end = $date->copy()->endOfDay();
 
+        // Silently ignore a camera id that doesn't belong to this site
+        // rather than throwing — an out-of-scope filter should degrade
+        // to "all cameras" rather than 500 the export.
+        if ($cameraId !== null && ! $site->cameras()->whereKey($cameraId)->exists()) {
+            $cameraId = null;
+        }
+
         Log::info('Plate log CSV exported', [
             'site_id' => $site->getKey(),
+            'camera_id' => $cameraId,
             'date' => $date->toDateString(),
             'user_id' => auth()->id(),
         ]);
 
         $filename = 'plate-log-'
             .Str::slug($site->name)
+            .($cameraId !== null ? '-camera-'.$cameraId : '')
             .'-'.$date->toDateString()
             .'.csv';
 
-        return response()->streamDownload(function () use ($site, $start, $end): void {
+        return response()->streamDownload(function () use ($site, $start, $end, $cameraId): void {
             $handle = fopen('php://output', 'w');
 
             fputcsv($handle, ['Time', 'Plate', 'Camera', 'Direction', 'Confidence']);
 
             PlateEvent::query()
                 ->forSite($site->getKey())
+                ->when($cameraId, fn ($q, $id) => $q->where('camera_id', $id))
                 ->with('camera:id,name')
                 ->whereBetween('captured_at', [$start, $end])
                 ->orderBy('captured_at')

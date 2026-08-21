@@ -320,10 +320,11 @@ class TrafficAnalytics
      *
      * @return Collection<int, PlateEvent>
      */
-    public function recentDetections(int $limit = 10): Collection
+    public function recentDetections(int $limit = 10, ?int $cameraId = null): Collection
     {
         $entries = PlateEvent::query()
             ->whereNotNull('direction')
+            ->when($cameraId, fn ($q, $id) => $q->where('camera_id', $id))
             ->with('camera:id,name')
             ->orderByDesc('captured_at')
             ->limit($limit)

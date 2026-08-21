@@ -120,6 +120,61 @@ it('shows the camera that caught the vehicle coming in', function () {
     Livewire::test('pages::security')->assertSee('North entrance');
 });
 
+it('narrows dwell alerts to a picked camera', function () {
+    // Pinning the site is required — the filter is only kept when the
+    // picked id belongs to the current site's active cameras.
+    app(App\Support\Tenancy::class)->setCurrentSiteId($this->site->id);
+
+    // The site has two entrance cameras. A vehicle over the threshold on
+    // each — picking one camera should hide the other's plate.
+    $secondEntrance = Camera::factory()->for($this->site)->entrance()->create(['name' => 'West gate']);
+
+    $entryEventA = PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'CAMONE01',
+        'captured_at' => Date::now()->subHours(7),
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'CAMONE01',
+        'entry_event_id' => $entryEventA->id,
+        'entered_at' => Date::now()->subHours(7),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    $entryEventB = PlateEvent::factory()->for($secondEntrance)->create([
+        'plate_number' => 'CAMTWO01',
+        'captured_at' => Date::now()->subHours(7),
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'CAMTWO01',
+        'entry_event_id' => $entryEventB->id,
+        'entered_at' => Date::now()->subHours(7),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    Livewire::test('pages::security')
+        ->assertSee('CAMONE01')
+        ->assertSee('CAMTWO01')
+        ->set('cameraId', $this->camera->id)
+        ->assertSee('CAMONE01')
+        ->assertDontSee('CAMTWO01');
+});
+
+it('offers the camera filter only when the site has multiple cameras', function () {
+    // beforeEach already added an entrance + exit camera on the site.
+    app(App\Support\Tenancy::class)->setCurrentSiteId($this->site->id);
+    Livewire::test('pages::security')->assertSee('All cameras');
+
+    $solo = Site::factory()->for_($this->owner)->create(['name' => 'Mall Solo']);
+    Camera::factory()->for($solo)->entrance()->create();
+    app(App\Support\Tenancy::class)->setCurrentSiteId($solo->id);
+
+    Livewire::test('pages::security')->assertDontSee('All cameras');
+});
+
 it('shows an entry-only notice and suppresses phantom dwell alerts when a site has no exit camera', function () {
     // A separate entry-only site under the same owner, focused via the
     // tenant switcher so the page reads it as the current site.

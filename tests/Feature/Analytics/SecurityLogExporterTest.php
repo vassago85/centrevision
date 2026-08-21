@@ -17,9 +17,9 @@ beforeEach(function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 });
 
-function capturedCsv(Site $site, \Carbon\CarbonInterface $date): string
+function capturedCsv(Site $site, \Carbon\CarbonInterface $date, ?int $cameraId = null): string
 {
-    $response = app(SecurityLogExporter::class)->streamDay($site, $date);
+    $response = app(SecurityLogExporter::class)->streamDay($site, $date, $cameraId);
 
     ob_start();
     $response->sendContent();
@@ -85,6 +85,43 @@ it('does not include events from other days', function () {
 
     expect($csv)->toContain('TODAY01GP')
         ->not->toContain('YESTER1GP');
+});
+
+it('narrows the export to a single camera when one is picked', function () {
+    $exit = Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'NORTH01GP',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->startOfDay()->addHours(9),
+    ]);
+    PlateEvent::factory()->for($exit)->create([
+        'plate_number' => 'SOUTH02GP',
+        'direction' => PlateDirection::Out,
+        'captured_at' => Date::now()->startOfDay()->addHours(10),
+    ]);
+
+    $csv = capturedCsv($this->site, Date::now(), $this->camera->id);
+
+    expect($csv)->toContain('NORTH01GP')
+        ->not->toContain('SOUTH02GP');
+});
+
+it('ignores a camera id that belongs to another site', function () {
+    // A tampered filter — camera on someone else's site — should degrade
+    // to "all cameras for the current site" rather than exposing rows or
+    // erroring out.
+    $foreignSite = Site::factory()->create();
+    $foreignCamera = Camera::factory()->for($foreignSite)->entrance()->create();
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'MINEXX1GP',
+        'captured_at' => Date::now()->startOfDay()->addHours(10),
+    ]);
+
+    $csv = capturedCsv($this->site, Date::now(), $foreignCamera->id);
+
+    expect($csv)->toContain('MINEXX1GP');
 });
 
 it('exports plate events for an arbitrary historic day', function () {

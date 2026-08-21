@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\WatchlistKind;
+use App\Models\Camera;
 use App\Models\WatchlistPlate;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\SecurityLogExporter;
@@ -14,6 +15,14 @@ use Livewire\Component;
 new #[Title('Security')] class extends Component {
     #[Url(as: 'threshold', keep: true)]
     public int $thresholdHours = 0;
+
+    /**
+     * Optional per-camera filter. Only active when the current site has
+     * more than one camera — a single-camera site would only ever offer
+     * "All / that one".
+     */
+    #[Url(as: 'camera', keep: true)]
+    public ?int $cameraId = null;
 
     /**
      * The date whose plate-detection log the owner is about to download.
@@ -38,10 +47,56 @@ new #[Title('Security')] class extends Component {
             $this->logDate = now()->toDateString();
         }
 
+        $this->normaliseCameraId();
+
         // Landing on the security page counts as acknowledging any pending
         // alerts — this is what clears the dashboard bell for the current
         // user until new events arrive.
         auth()->user()?->markAlertsSeen();
+    }
+
+    public function updatedCameraId(): void
+    {
+        $this->normaliseCameraId();
+    }
+
+    /**
+     * Cameras of the current site — used to render the filter and to
+     * decide whether it's worth rendering at all.
+     *
+     * @return Collection<int, Camera>
+     */
+    #[Computed]
+    public function cameras(): Collection
+    {
+        $site = app(Tenancy::class)->currentSite();
+
+        if ($site === null) {
+            return collect();
+        }
+
+        return Camera::query()
+            ->where('site_id', $site->getKey())
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    #[Computed]
+    public function hasMultipleCameras(): bool
+    {
+        return $this->cameras->count() > 1;
+    }
+
+    protected function normaliseCameraId(): void
+    {
+        if ($this->cameraId === null) {
+            return;
+        }
+
+        if (! $this->cameras->contains('id', $this->cameraId)) {
+            $this->cameraId = null;
+        }
     }
 
     /**
@@ -61,19 +116,19 @@ new #[Title('Security')] class extends Component {
     #[Computed]
     public function overThreshold(): Collection
     {
-        return $this->security()->overThreshold($this->thresholdHours);
+        return $this->security()->overThreshold($this->thresholdHours, $this->cameraId);
     }
 
     #[Computed]
     public function oddHour(): Collection
     {
-        return $this->security()->oddHourRecurring();
+        return $this->security()->oddHourRecurring($this->cameraId);
     }
 
     #[Computed]
     public function multiEntry(): Collection
     {
-        return $this->security()->multipleEntriesToday();
+        return $this->security()->multipleEntriesToday($this->cameraId);
     }
 
     /**
@@ -153,7 +208,7 @@ new #[Title('Security')] class extends Component {
             return;
         }
 
-        return app(SecurityLogExporter::class)->streamDay($site, $date);
+        return app(SecurityLogExporter::class)->streamDay($site, $date, $this->cameraId);
     }
 }; ?>
 
@@ -162,6 +217,15 @@ new #[Title('Security')] class extends Component {
 <div wire:poll.30s>
     <x-page-header title="Security · dwell alerts" :subtitle="(app(App\Support\Tenancy::class)->currentSite()?->name ?? 'All sites').' · live'">
         <x-slot:actions>
+            @if ($this->hasMultipleCameras)
+                <flux:select wire:model.live="cameraId" size="sm" class="min-w-40" label="Camera" label:sr-only>
+                    <flux:select.option :value="null">All cameras</flux:select.option>
+                    @foreach ($this->cameras as $camera)
+                        <flux:select.option :value="$camera->id">{{ $camera->name }}</flux:select.option>
+                    @endforeach
+                </flux:select>
+            @endif
+
             @if (app(App\Support\Tenancy::class)->currentSite() !== null)
                 <div class="flex items-center gap-2">
                     <flux:input
@@ -220,7 +284,7 @@ new #[Title('Security')] class extends Component {
         />
         <x-metric
             label="No exit recorded"
-            :value="$this->security->orphanedCount()"
+            :value="$this->security->orphanedCount(7, $this->cameraId)"
             :delta="$this->isEntryOnly ? 'requires exit camera' : 'last 7 days'"
         />
     </div>

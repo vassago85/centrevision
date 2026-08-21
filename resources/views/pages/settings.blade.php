@@ -263,7 +263,7 @@ new #[Title('Settings')] class extends Component {
                     wire:model="retentionDays"
                     type="number"
                     label="Retention (days)"
-                    :description="'Plate data is deleted after this. Between '.config('trafficflow.retention_min_days').' and '.config('trafficflow.retention_max_days').' days.'"
+                    :description="'Standard is 180 days (6 months). Longer periods need to be agreed with us. Allowed range: '.config('trafficflow.retention_min_days').'–'.config('trafficflow.retention_max_days').' days.'"
                 />
             </div>
         </x-panel>

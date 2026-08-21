@@ -30,14 +30,19 @@ class SecurityAnalytics
      * unmonitored gate, so flagging every four-hour-old entry as a dwell
      * breach would drown the security team in false positives.
      *
+     * $cameraId narrows the set to visits whose entry event came from that
+     * camera. Useful when a site has multiple entrance lanes and the
+     * operator wants to look at one of them.
+     *
      * @return Collection<int, Visit>
      */
-    public function overThreshold(int $thresholdHours): Collection
+    public function overThreshold(int $thresholdHours, ?int $cameraId = null): Collection
     {
         return Visit::query()
             ->open()
             ->where('entered_at', '<=', Date::now()->subHours($thresholdHours))
             ->whereIn('site_id', $this->sitesWithExitTracking())
+            ->when($cameraId, fn ($q, $id) => $q->whereHas('entryEvent', fn ($ev) => $ev->where('camera_id', $id)))
             ->with(['site:id,name', 'entryEvent.camera:id,name'])
             ->orderBy('entered_at')
             ->get();
@@ -68,7 +73,7 @@ class SecurityAnalytics
      *
      * @return Collection<int, array{plate_number: string, days: int, window_days: int, typical_time: string}>
      */
-    public function oddHourRecurring(): Collection
+    public function oddHourRecurring(?int $cameraId = null): Collection
     {
         $config = config('trafficflow.security');
         $windowDays = (int) $config['odd_hour_window_days'];
@@ -77,6 +82,7 @@ class SecurityAnalytics
 
         return PlateEvent::query()
             ->where('direction', PlateDirection::In)
+            ->when($cameraId, fn ($q, $id) => $q->where('camera_id', $id))
             ->where('captured_at', '>=', Date::now()->subDays($windowDays))
             // The window wraps midnight, so it is a union of two ranges.
             ->whereRaw('(extract(hour from captured_at) >= ? or extract(hour from captured_at) < ?)', [$start, $end])
@@ -113,13 +119,14 @@ class SecurityAnalytics
      *
      * @return Collection<int, array{plate_number: string, entries: int, last_seen: string, times: array<int, string>}>
      */
-    public function multipleEntriesToday(): Collection
+    public function multipleEntriesToday(?int $cameraId = null): Collection
     {
         $threshold = (int) config('trafficflow.security.multi_entry_threshold');
         $dayStart = Date::now()->startOfDay();
 
         $counts = PlateEvent::query()
             ->where('direction', PlateDirection::In)
+            ->when($cameraId, fn ($q, $id) => $q->where('camera_id', $id))
             ->where('captured_at', '>=', $dayStart)
             ->selectRaw('plate_number, count(*) as entries')
             ->groupBy('plate_number')
@@ -138,6 +145,7 @@ class SecurityAnalytics
         // than only the last one.
         $times = PlateEvent::query()
             ->where('direction', PlateDirection::In)
+            ->when($cameraId, fn ($q, $id) => $q->where('camera_id', $id))
             ->where('captured_at', '>=', $dayStart)
             ->whereIn('plate_number', $counts->pluck('plate_number')->all())
             ->orderBy('captured_at')
@@ -165,12 +173,13 @@ class SecurityAnalytics
      * Entry-only sites are excluded — for them a missing exit is expected,
      * not an anomaly, so counting them would make every site look broken.
      */
-    public function orphanedCount(int $days = 7): int
+    public function orphanedCount(int $days = 7, ?int $cameraId = null): int
     {
         return Visit::query()
             ->where('status', VisitStatus::Orphaned)
             ->where('entered_at', '>=', Date::now()->subDays($days))
             ->whereIn('site_id', $this->sitesWithExitTracking())
+            ->when($cameraId, fn ($q, $id) => $q->whereHas('entryEvent', fn ($ev) => $ev->where('camera_id', $id)))
             ->count();
     }
 }

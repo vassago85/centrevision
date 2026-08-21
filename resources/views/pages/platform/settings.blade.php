@@ -449,7 +449,7 @@ new #[Title('Platform settings')] class extends Component {
                     wire:model="retentionDays"
                     type="number"
                     label="POPIA retention (days)"
-                    description="Between 30 and 1095. Plate data older than this is pruned nightly."
+                    description="Default for new sites. Standard is 180 days (6 months); longer periods need discussion with the customer. Range: 30 to 1095."
                 />
 
                 <div class="md:col-span-2 flex justify-end">

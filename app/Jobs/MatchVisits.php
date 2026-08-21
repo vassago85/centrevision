@@ -9,6 +9,7 @@ use App\Models\PlateEvent;
 use App\Models\Scopes\SiteScope;
 use App\Models\Site;
 use App\Models\Visit;
+use App\Support\Alerts\AlertEvaluator;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Builder;
@@ -49,6 +50,7 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
         foreach ($this->sites() as $site) {
             $this->matchSite($site);
             $this->orphanStaleVisits($site);
+            app(AlertEvaluator::class)->evaluateDwellForSite($site);
         }
     }
 
@@ -128,13 +130,19 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             ])->save();
         }
 
-        Visit::query()->withoutGlobalScope(SiteScope::class)->create([
+        $visit = Visit::query()->withoutGlobalScope(SiteScope::class)->create([
             'site_id' => $site->getKey(),
             'plate_number' => $event->plate_number,
             'entry_event_id' => $event->getKey(),
             'entered_at' => $event->captured_at,
             'status' => VisitStatus::Open,
         ]);
+
+        app(AlertEvaluator::class)->evaluateWatchlistHit(
+            $site,
+            $event->plate_number,
+            $visit->getKey(),
+        );
     }
 
     /**

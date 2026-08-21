@@ -58,6 +58,7 @@ class UserFactory extends Factory
         return $this->state(fn () => [
             'role' => UserRole::SecurityOperator,
             'organization_id' => $organization?->getKey() ?? Organization::factory()->owner(),
+            'alert_email_opt_in' => true,
         ]);
     }
 

@@ -27,6 +27,8 @@ new #[Title('Settings')] class extends Component {
 
     public int $retentionDays = 365;
 
+    public ?int $parkingCapacity = null;
+
     public int $recurringWindowDays = 28;
 
     public float $recurringMinWeekdayRatio = 0.8;
@@ -38,6 +40,30 @@ new #[Title('Settings')] class extends Component {
     public string $reportSchedule = 'off';
 
     public string $reportRecipients = '';
+
+    public bool $alertsEnabled = false;
+
+    public string $alertRecipients = '';
+
+    public string $alertQuietStart = '';
+
+    public string $alertQuietEnd = '';
+
+    public bool $alertWatchlistEnabled = true;
+
+    public bool $alertWatchlistRespectQuiet = false;
+
+    public bool $alertDwellEnabled = true;
+
+    public bool $alertDwellRespectQuiet = true;
+
+    public bool $alertOddHourEnabled = true;
+
+    public bool $alertOddHourRespectQuiet = true;
+
+    public bool $alertMultiEntryEnabled = true;
+
+    public bool $alertMultiEntryRespectQuiet = true;
 
     public function mount(): void
     {
@@ -68,11 +94,28 @@ new #[Title('Settings')] class extends Component {
         $this->dwellAlertHours = $site->dwellAlertHours();
         $this->orphanAfterHours = $site->orphanAfterHours();
         $this->retentionDays = $site->retentionDays();
+        $this->parkingCapacity = $site->parkingCapacity();
         $this->recurringWindowDays = (int) $site->setting('recurring_window_days');
         $this->recurringMinWeekdayRatio = (float) $site->setting('recurring_min_weekday_ratio');
         $this->recurringMaxArrivalStddevMinutes = (float) $site->setting('recurring_max_arrival_stddev_minutes');
         $this->reportSchedule = $site->reportSchedule()->value;
         $this->reportRecipients = implode(', ', $site->reportRecipients());
+
+        $alerts = is_array($site->setting('alerts', [])) ? $site->setting('alerts', []) : [];
+        $rules = is_array($alerts['rules'] ?? null) ? $alerts['rules'] : [];
+
+        $this->alertsEnabled = (bool) ($alerts['enabled'] ?? false);
+        $this->alertRecipients = implode(', ', (array) ($alerts['recipients'] ?? []));
+        $this->alertQuietStart = (string) ($alerts['quiet_start'] ?? '');
+        $this->alertQuietEnd = (string) ($alerts['quiet_end'] ?? '');
+        $this->alertWatchlistEnabled = (bool) ($rules['watchlist_hit']['enabled'] ?? true);
+        $this->alertWatchlistRespectQuiet = (bool) ($rules['watchlist_hit']['respect_quiet'] ?? false);
+        $this->alertDwellEnabled = (bool) ($rules['dwell']['enabled'] ?? true);
+        $this->alertDwellRespectQuiet = (bool) ($rules['dwell']['respect_quiet'] ?? true);
+        $this->alertOddHourEnabled = (bool) ($rules['odd_hour']['enabled'] ?? true);
+        $this->alertOddHourRespectQuiet = (bool) ($rules['odd_hour']['respect_quiet'] ?? true);
+        $this->alertMultiEntryEnabled = (bool) ($rules['multi_entry']['enabled'] ?? true);
+        $this->alertMultiEntryRespectQuiet = (bool) ($rules['multi_entry']['respect_quiet'] ?? true);
     }
 
     #[Computed]
@@ -118,6 +161,7 @@ new #[Title('Settings')] class extends Component {
                 'min:'.config('trafficflow.retention_min_days'),
                 'max:'.config('trafficflow.retention_max_days'),
             ],
+            'parkingCapacity' => ['nullable', 'integer', 'min:1', 'max:100000'],
             'recurringWindowDays' => ['required', 'integer', 'min:7', 'max:90'],
             'recurringMinWeekdayRatio' => ['required', 'numeric', 'min:0.5', 'max:1'],
             'recurringMaxArrivalStddevMinutes' => ['required', 'numeric', 'min:5', 'max:180'],
@@ -133,6 +177,7 @@ new #[Title('Settings')] class extends Component {
                 'dwell_alert_hours' => $this->dwellAlertHours,
                 'orphan_after_hours' => $this->orphanAfterHours,
                 'retention_days' => $this->retentionDays,
+                'parking_capacity' => $this->parkingCapacity,
                 'recurring_window_days' => $this->recurringWindowDays,
                 'recurring_min_weekday_ratio' => $this->recurringMinWeekdayRatio,
                 'recurring_max_arrival_stddev_minutes' => $this->recurringMaxArrivalStddevMinutes,
@@ -180,6 +225,78 @@ new #[Title('Settings')] class extends Component {
         $this->reportRecipients = $recipients->implode(', ');
 
         Flux::toast(variant: 'success', text: 'Report schedule saved.');
+    }
+
+    public function saveAlertSettings(): void
+    {
+        $site = $this->site();
+
+        abort_if($site === null, 404);
+        $this->authorize('update', $site);
+
+        $recipients = collect(preg_split('/[\s,;]+/', $this->alertRecipients, flags: PREG_SPLIT_NO_EMPTY))
+            ->map(fn (string $email) => mb_strtolower(trim($email)))
+            ->unique()
+            ->values();
+
+        Validator::make(
+            [
+                'recipients' => $recipients->all(),
+                'quiet_start' => $this->alertQuietStart,
+                'quiet_end' => $this->alertQuietEnd,
+            ],
+            [
+                'recipients' => ['array', 'max:'.config('trafficflow.report_max_recipients')],
+                'recipients.*' => ['email'],
+                'quiet_start' => ['nullable', 'string', 'regex:/^\d{2}:\d{2}$/'],
+                'quiet_end' => ['nullable', 'string', 'regex:/^\d{2}:\d{2}$/'],
+            ],
+            [],
+            ['recipients.*' => 'recipient'],
+        )->validateWithBag('default');
+
+        $quietStart = $this->alertQuietStart !== '' ? $this->alertQuietStart : null;
+        $quietEnd = $this->alertQuietEnd !== '' ? $this->alertQuietEnd : null;
+
+        if (($quietStart === null) xor ($quietEnd === null)) {
+            $this->addError('alertQuietStart', 'Set both quiet start and end, or leave both blank.');
+
+            return;
+        }
+
+        $site->update([
+            'settings' => [
+                ...($site->settings ?? []),
+                'alerts' => [
+                    'enabled' => $this->alertsEnabled,
+                    'recipients' => $recipients->all(),
+                    'quiet_start' => $quietStart,
+                    'quiet_end' => $quietEnd,
+                    'rules' => [
+                        'watchlist_hit' => [
+                            'enabled' => $this->alertWatchlistEnabled,
+                            'respect_quiet' => $this->alertWatchlistRespectQuiet,
+                        ],
+                        'dwell' => [
+                            'enabled' => $this->alertDwellEnabled,
+                            'respect_quiet' => $this->alertDwellRespectQuiet,
+                        ],
+                        'odd_hour' => [
+                            'enabled' => $this->alertOddHourEnabled,
+                            'respect_quiet' => $this->alertOddHourRespectQuiet,
+                        ],
+                        'multi_entry' => [
+                            'enabled' => $this->alertMultiEntryEnabled,
+                            'respect_quiet' => $this->alertMultiEntryRespectQuiet,
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->alertRecipients = $recipients->implode(', ');
+
+        Flux::toast(variant: 'success', text: 'Alert settings saved.');
     }
 
     public function saveRevenueShare(): void
@@ -245,7 +362,7 @@ new #[Title('Settings')] class extends Component {
         </x-panel>
 
         <x-panel heading="Thresholds">
-            <div class="grid grid-cols-3 gap-4 rounded-tf border border-line bg-surface p-5 max-md:grid-cols-1">
+            <div class="grid grid-cols-2 gap-4 rounded-tf border border-line bg-surface p-5 max-md:grid-cols-1">
                 <flux:select wire:model="dwellAlertHours" label="Dwell alert" description="Flags a vehicle on the Security page once it passes this.">
                     @foreach (config('trafficflow.dwell_alert_options') as $hours)
                         <flux:select.option :value="$hours">{{ $hours }} hours</flux:select.option>
@@ -264,6 +381,13 @@ new #[Title('Settings')] class extends Component {
                     type="number"
                     label="Retention (days)"
                     :description="'Standard is 180 days (6 months). Longer periods need to be agreed with us. Allowed range: '.config('trafficflow.retention_min_days').'–'.config('trafficflow.retention_max_days').' days.'"
+                />
+
+                <flux:input
+                    wire:model="parkingCapacity"
+                    type="number"
+                    label="Parking capacity (bays)"
+                    description="Optional. When set, the dashboard shows occupancy % from vehicles currently on site."
                 />
             </div>
         </x-panel>
@@ -334,6 +458,68 @@ new #[Title('Settings')] class extends Component {
 
                 <flux:button variant="primary" type="submit">Save</flux:button>
             </div>
+        </form>
+    </x-panel>
+
+    <x-panel heading="Security alert emails">
+        <form wire:submit="saveAlertSettings" class="rounded-tf border border-line bg-surface p-5">
+            <p class="mb-4 max-w-prose text-[13px] text-ink-2">
+                Email the security desk when configured rules fire. Site recipients always get mail when
+                alerts are on; owner admins and security operators can also opt in under Account → Security.
+                Off by default.
+            </p>
+
+            <div class="mb-4">
+                <flux:checkbox wire:model="alertsEnabled" label="Enable security alert emails for this site" />
+            </div>
+
+            <div class="mb-4 flex flex-wrap items-end gap-4">
+                <flux:input
+                    wire:model="alertRecipients"
+                    label="Desk recipients"
+                    description="Comma separated. Max {{ config('trafficflow.report_max_recipients') }}."
+                    placeholder="security@example.com"
+                    class="min-w-80 flex-1"
+                />
+                <flux:input wire:model="alertQuietStart" label="Quiet start" placeholder="22:00" class="max-w-32" />
+                <flux:input wire:model="alertQuietEnd" label="Quiet end" placeholder="06:00" class="max-w-32" />
+            </div>
+
+            <div class="mb-4 overflow-x-auto">
+                <table class="w-full text-left text-[13px]">
+                    <thead>
+                        <tr class="border-b border-line text-ink-muted">
+                            <th class="py-2 font-medium">Rule</th>
+                            <th class="py-2 font-medium">Enabled</th>
+                            <th class="py-2 font-medium">Respect quiet hours</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="border-b border-line">
+                            <td class="py-2">Watchlist hit</td>
+                            <td class="py-2"><flux:checkbox wire:model="alertWatchlistEnabled" /></td>
+                            <td class="py-2"><flux:checkbox wire:model="alertWatchlistRespectQuiet" /></td>
+                        </tr>
+                        <tr class="border-b border-line">
+                            <td class="py-2">Dwell over threshold</td>
+                            <td class="py-2"><flux:checkbox wire:model="alertDwellEnabled" /></td>
+                            <td class="py-2"><flux:checkbox wire:model="alertDwellRespectQuiet" /></td>
+                        </tr>
+                        <tr class="border-b border-line">
+                            <td class="py-2">Odd-hour pattern</td>
+                            <td class="py-2"><flux:checkbox wire:model="alertOddHourEnabled" /></td>
+                            <td class="py-2"><flux:checkbox wire:model="alertOddHourRespectQuiet" /></td>
+                        </tr>
+                        <tr>
+                            <td class="py-2">Multi-entry today</td>
+                            <td class="py-2"><flux:checkbox wire:model="alertMultiEntryEnabled" /></td>
+                            <td class="py-2"><flux:checkbox wire:model="alertMultiEntryRespectQuiet" /></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <flux:button variant="primary" type="submit">Save alert settings</flux:button>
         </form>
     </x-panel>
 

@@ -1,6 +1,7 @@
 <?php
 
 use App\Concerns\PasswordValidationRules;
+use App\Enums\UserRole;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
@@ -26,6 +27,10 @@ new #[Title('Security settings')] class extends Component {
 
     public bool $requiresConfirmation;
 
+    public bool $canOptInAlertEmail = false;
+
+    public bool $alertEmailOptIn = false;
+
     #[Locked]
     public bool $canManagePasskeys;
 
@@ -45,6 +50,11 @@ new #[Title('Security settings')] class extends Component {
      */
     public function mount(DisableTwoFactorAuthentication $disableTwoFactorAuthentication): void
     {
+        $user = auth()->user();
+
+        $this->canOptInAlertEmail = in_array($user?->role, [UserRole::OwnerAdmin, UserRole::SecurityOperator], true);
+        $this->alertEmailOptIn = (bool) ($user?->alert_email_opt_in ?? false);
+
         $this->canManageTwoFactor = Features::canManageTwoFactorAuthentication();
 
         if ($this->canManageTwoFactor) {
@@ -61,6 +71,17 @@ new #[Title('Security settings')] class extends Component {
         if ($this->canManagePasskeys) {
             $this->loadPasskeys();
         }
+    }
+
+    public function saveAlertEmailOptIn(): void
+    {
+        abort_unless($this->canOptInAlertEmail, 403);
+
+        Auth::user()->update([
+            'alert_email_opt_in' => $this->alertEmailOptIn,
+        ]);
+
+        Flux::toast(variant: 'success', text: __('Alert email preference saved.'));
     }
 
     /**
@@ -172,6 +193,17 @@ new #[Title('Security settings')] class extends Component {
     <flux:heading class="sr-only">{{ __('Security settings') }}</flux:heading>
 
     <x-pages::account.layout :heading="__('Update password')" :subheading="__('Ensure your account is using a long, random password to stay secure')">
+        @if ($canOptInAlertEmail)
+            <form wire:submit="saveAlertEmailOptIn" class="mb-10 space-y-4 rounded-tf border border-line bg-surface p-5">
+                <flux:heading size="lg">{{ __('Security alert emails') }}</flux:heading>
+                <flux:subheading>
+                    {{ __('When a site enables alert emails, also send copies to this address.') }}
+                </flux:subheading>
+                <flux:checkbox wire:model="alertEmailOptIn" :label="__('Email me security alerts')" />
+                <flux:button variant="primary" type="submit" size="sm">{{ __('Save') }}</flux:button>
+            </form>
+        @endif
+
         <form method="POST" wire:submit="updatePassword" class="mt-6 space-y-6">
             <flux:input
                 wire:model="current_password"

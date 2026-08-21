@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\WatchlistKind;
+use App\Models\AlertEvent;
 use App\Models\Camera;
 use App\Models\WatchlistPlate;
 use App\Support\Analytics\SecurityAnalytics;
@@ -129,6 +130,25 @@ new #[Title('Security')] class extends Component {
     public function multiEntry(): Collection
     {
         return $this->security()->multipleEntriesToday($this->cameraId);
+    }
+
+    /**
+     * @return Collection<int, AlertEvent>
+     */
+    #[Computed]
+    public function recentAlertEmails(): Collection
+    {
+        $site = app(Tenancy::class)->currentSite();
+
+        if ($site === null) {
+            return collect();
+        }
+
+        return AlertEvent::query()
+            ->where('site_id', $site->getKey())
+            ->orderByDesc('detected_at')
+            ->limit(20)
+            ->get();
     }
 
     /**
@@ -288,6 +308,25 @@ new #[Title('Security')] class extends Component {
             :delta="$this->isEntryOnly ? 'requires exit camera' : 'last 7 days'"
         />
     </div>
+
+    <x-panel heading="Recent alert emails">
+        <x-data-table
+            :headers="['When', 'Rule', 'Plate', 'Status']"
+            :is-empty="$this->recentAlertEmails->isEmpty()"
+            empty="No outbound alert emails yet. Enable alerts under Settings."
+        >
+            @foreach ($this->recentAlertEmails as $alert)
+                <tr wire:key="alert-{{ $alert->id }}">
+                    <td class="border-b border-line py-2">{{ $alert->detected_at->format('D H:i') }}</td>
+                    <td class="border-b border-line py-2">{{ $alert->rule->label() }}</td>
+                    <td class="border-b border-line py-2"><x-plate :number="$alert->plate_number" /></td>
+                    <td class="border-b border-line py-2">
+                        <x-badge>{{ $alert->status->label() }}</x-badge>
+                    </td>
+                </tr>
+            @endforeach
+        </x-data-table>
+    </x-panel>
 
     <x-panel heading="Currently over threshold">
         <x-data-table

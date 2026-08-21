@@ -206,12 +206,22 @@ new #[Title('Dashboard')] class extends Component
         } elseif ($this->isToday) {
             $onSite = $a->currentlyOnSite();
             $peak = $a->peakHour($range);
+            $occupancy = $a->occupancyPercent();
+            $site = app(Tenancy::class)->currentSite();
+            $capacity = $site?->parkingCapacity();
 
             $thirdCard = [
-                'label' => 'Currently on site',
-                'value' => number_format($onSite),
+                'label' => $occupancy === null ? 'Currently on site' : 'Occupancy',
+                'value' => $occupancy === null
+                    ? number_format($onSite)
+                    : rtrim(rtrim(number_format($occupancy, 1), '0'), '.').'%',
                 'icon' => 'map-pin',
-                'compare' => ['label' => $onSite === 0 ? 'No open visits' : 'Live', 'tone' => $onSite === 0 ? 'muted' : 'up'],
+                'compare' => [
+                    'label' => $occupancy === null
+                        ? ($onSite === 0 ? 'No open visits' : 'Live')
+                        : number_format($onSite).' / '.number_format($capacity).' bays',
+                    'tone' => $onSite === 0 ? 'muted' : 'up',
+                ],
                 'vs' => $peak === null ? 'No arrivals yet today' : 'Busiest hour: '.$peak['label'],
             ];
         } else {

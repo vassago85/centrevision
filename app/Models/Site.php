@@ -60,6 +60,7 @@ class Site extends Model implements SiteScoped
         'recurring_max_arrival_stddev_minutes' => null,
         'report_schedule' => null,
         'report_recipients' => [],
+        'parking_capacity' => null,
     ];
 
     protected function casts(): array
@@ -267,5 +268,22 @@ class Site extends Model implements SiteScoped
     public function reportRecipients(): array
     {
         return array_values(array_filter((array) $this->setting('report_recipients', [])));
+    }
+
+    /**
+     * Declared parking bay count for occupancy %. Null means unknown — UI
+     * should hide occupancy rather than invent a percentage.
+     */
+    public function parkingCapacity(): ?int
+    {
+        $value = $this->setting('parking_capacity');
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $capacity = (int) $value;
+
+        return $capacity > 0 ? $capacity : null;
     }
 }

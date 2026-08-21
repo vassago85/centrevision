@@ -27,6 +27,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property string $email
  * @property CarbonInterface|null $email_verified_at
  * @property CarbonInterface|null $alerts_last_seen_at
+ * @property bool $alert_email_opt_in
  * @property string $password
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
@@ -35,7 +36,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
  */
-#[Fillable(['name', 'email', 'password', 'organization_id', 'role'])]
+#[Fillable(['name', 'email', 'password', 'organization_id', 'role', 'alert_email_opt_in'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 class User extends Authenticatable implements PasskeyUser
 {
@@ -62,6 +63,7 @@ class User extends Authenticatable implements PasskeyUser
         return [
             'email_verified_at' => 'datetime',
             'alerts_last_seen_at' => 'datetime',
+            'alert_email_opt_in' => 'boolean',
             'password' => 'hashed',
             'role' => UserRole::class,
         ];
@@ -80,6 +82,13 @@ class User extends Authenticatable implements PasskeyUser
 
     protected static function booted(): void
     {
+        static::creating(function (User $user): void {
+            if ($user->role === UserRole::SecurityOperator
+                && ! array_key_exists('alert_email_opt_in', $user->getAttributes())) {
+                $user->alert_email_opt_in = true;
+            }
+        });
+
         // Keep the spatie role in step with the role column so policies and
         // gates can use can()/hasRole() without a second source of truth.
         static::saved(function (User $user): void {

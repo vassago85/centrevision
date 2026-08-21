@@ -1,6 +1,8 @@
 <?php
 
 use App\Jobs\EnrichSiteDayStats;
+use App\Jobs\EvaluatePatternAlertRules;
+use App\Jobs\FlushPendingAlertEvents;
 use App\Jobs\GenerateMonthlyInvoices;
 use App\Jobs\GeneratePartnerPayouts;
 use App\Jobs\MatchVisits;
@@ -22,6 +24,10 @@ Schedule::job(new SweepFtpDropFolder)->everyFiveMinutes()->withoutOverlapping();
 // Turn raw events into visits. Frequent enough that the Security view is
 // meaningfully live, cheap because it only reads unprocessed events.
 Schedule::job(new MatchVisits)->everyTwoMinutes()->withoutOverlapping();
+
+// Pattern security alerts (odd-hour / multi-entry / dwell age) + quiet-hour flush.
+Schedule::job(new EvaluatePatternAlertRules)->everyFifteenMinutes()->withoutOverlapping();
+Schedule::job(new FlushPendingAlertEvents)->everyFifteenMinutes()->withoutOverlapping();
 
 // Staff and tenant detection, run overnight when the previous day is complete.
 Schedule::job(new TagRecurringPlates)->dailyAt('02:15');

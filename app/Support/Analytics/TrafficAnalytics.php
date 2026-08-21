@@ -181,6 +181,27 @@ class TrafficAnalytics
     }
 
     /**
+     * Open visits as a percent of the site's declared parking capacity.
+     * Null when capacity is unset or the tenant spans multiple sites.
+     */
+    public function occupancyPercent(?\App\Models\Site $site = null): ?float
+    {
+        $site ??= app(\App\Support\Tenancy::class)->currentSite();
+
+        if ($site === null) {
+            return null;
+        }
+
+        $capacity = $site->parkingCapacity();
+
+        if ($capacity === null) {
+            return null;
+        }
+
+        return round(($this->currentlyOnSite() / $capacity) * 100, 1);
+    }
+
+    /**
      * True when any site the caller can currently see has at least one
      * camera capable of reporting exits. Used by the dashboard to decide
      * whether "Currently on site" and dwell KPIs are honest to show, or

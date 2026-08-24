@@ -36,11 +36,23 @@
     @endif
 
     <nav class="mt-1 flex flex-col gap-1 overflow-y-auto text-[14px]">
+        @php $previousGroup = null; @endphp
         @foreach ($items as $item)
             @php
                 $isCurrent = request()->routeIs($item['route']);
                 $isDanger = ($item['tone'] ?? null) === 'danger';
+                $group = $item['group'] ?? null;
+                $needsDivider = $group !== null && $previousGroup !== null && $group !== $previousGroup;
+                $previousGroup = $group;
             @endphp
+
+            @if ($needsDivider)
+                {{-- Subtle group boundary. A slightly wider gap and a light
+                     hairline; no group heading, because the plan explicitly
+                     asks for quiet grouping, not new labels shouting at
+                     the operator. --}}
+                <div class="my-1.5 border-t border-line/60"></div>
+            @endif
 
             <a
                 href="{{ route($item['route']) }}"

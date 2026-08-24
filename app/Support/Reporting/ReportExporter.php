@@ -40,9 +40,9 @@ class ReportExporter
         fputcsv($handle, []);
 
         fputcsv($handle, ['Summary']);
-        fputcsv($handle, ['Total visits', $summary['total']]);
-        fputcsv($handle, ['Unique vehicles', $summary['unique']]);
-        fputcsv($handle, ['Returning vehicles', $summary['returning']]);
+        fputcsv($handle, ['Visits', $summary['total']]);
+        fputcsv($handle, ['Unique visitors', $summary['unique']]);
+        fputcsv($handle, ['Returning visitors', $summary['returning']]);
         fputcsv($handle, ['Return rate (%)', $summary['return_rate'] ?? '']);
         fputcsv($handle, ['30-day return rate (%)', $summary['return_rate_30d'] ?? '']);
         fputcsv($handle, ['Daily average', $summary['daily_average']]);

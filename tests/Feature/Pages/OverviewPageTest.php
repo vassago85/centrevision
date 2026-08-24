@@ -58,7 +58,10 @@ it('gives a shop the aggregates without the plates behind them', function () {
     actingAsTenant(User::factory()->shopAdmin($this->shop)->create());
 
     Livewire::test('pages::overview')
-        ->assertSee('Total Visits')
+        // Dashboard defaults to Today, so the headline visit KPI reads
+        // "Visits Today". Commercial copy uses "Unique Visitors" now.
+        ->assertSee('Visits Today')
+        ->assertSee('Unique Visitors')
         ->assertSee('Mall A')
         ->assertDontSee('HIT 001 GP')
         ->assertDontSee('SHOPPER1');
@@ -139,18 +142,13 @@ it('sends a platform admin to the cross-tenant view', function () {
 it('recalculates when the period changes', function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
-    Visit::factory()->for($this->site)->create([
-        'entered_at' => Date::now()->subDays(20),
-        'exited_at' => Date::now()->subDays(20)->addHour(),
-        'dwell_minutes' => 60,
-        'status' => VisitStatus::Closed,
-    ]);
-
     Livewire::test('pages::overview')
-        ->assertSet('rangeKey', '7d')
-        ->assertSee('Vehicle traffic · last 7 days')
-        ->set('rangeKey', '30d')
-        ->assertSee('Vehicle traffic · last 30 days');
+        // Dashboard defaults to Today — it is the "what is happening now"
+        // screen, and longer windows live under Reports.
+        ->assertSet('rangeKey', 'today')
+        ->assertSee('today')
+        ->set('rangeKey', '7d')
+        ->assertSee('last 7 days');
 });
 
 it('falls back to the default period when the query string is nonsense', function () {
@@ -158,7 +156,22 @@ it('falls back to the default period when the query string is nonsense', functio
 
     Livewire::withQueryParams(['range' => 'forever'])
         ->test('pages::overview')
-        ->assertSet('rangeKey', '7d');
+        ->assertSet('rangeKey', 'today');
+});
+
+it('drops the 30-day and 90-day ranges from the dashboard picker', function () {
+    // Longer windows are Reports' job. If a bookmark points at them, the
+    // dashboard should silently reset to today rather than opening a range
+    // that no longer belongs to this screen.
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::withQueryParams(['range' => '30d'])
+        ->test('pages::overview')
+        ->assertSet('rangeKey', 'today');
+
+    Livewire::withQueryParams(['range' => '90d'])
+        ->test('pages::overview')
+        ->assertSet('rangeKey', 'today');
 });
 
 it('leaves staff plates out of the headline numbers', function () {
@@ -182,15 +195,15 @@ it('leaves staff plates out of the headline numbers', function () {
     Livewire::test('pages::overview')->assertDontSee('STAFF001');
 });
 
-it('drops the currently-on-site and dwell KPIs when the site has no exit-capable camera', function () {
+it('drops the on-site-now and dwell KPIs when the site has no exit-capable camera', function () {
     // Site has only the entrance camera from beforeEach; no Exit or Both.
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
     Livewire::withQueryParams(['range' => 'today'])
         ->test('pages::overview')
-        // Entry-only sites cannot report a truthful "on site now" or dwell.
-        ->assertDontSee('Currently on site')
-        ->assertDontSee('Avg Dwell Time')
+        // Entry-only sites cannot report a truthful on-site count or dwell.
+        ->assertDontSee('On Site Now')
+        ->assertDontSee('Average Dwell')
         // Replaced with figures that entries-only data can actually compute.
         ->assertSee('Peak hour')
         ->assertSee('Repeat visitors')
@@ -198,24 +211,11 @@ it('drops the currently-on-site and dwell KPIs when the site has no exit-capable
         ->assertSee('add an exit camera for dwell');
 });
 
-it('shows dwell and currently-on-site once an exit-capable camera is present', function () {
+it('leads with On Site Now on both Today and 7 days when the site has an exit camera', function () {
     Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
 
-    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
-
-    Livewire::withQueryParams(['range' => 'today'])
-        ->test('pages::overview')
-        ->assertSee('Currently on site')
-        ->assertSee('Avg Dwell Time')
-        ->assertDontSee('add an exit camera for dwell');
-});
-
-it('reshapes the dashboard for today, showing currently-on-site instead of return rate', function () {
-    // Add an exit camera so this test sees the full-tracking layout — the
-    // entry-only variant is exercised by the test above.
-    Camera::factory()->for($this->site)->exit()->create(['name' => 'South exit']);
-
-    // A visit that's still open right now.
+    // A visit that's still open right now — On Site Now should count it
+    // regardless of which range the user is looking at.
     Visit::factory()->for($this->site)->create([
         'plate_number' => 'ONSITE01',
         'entered_at' => Date::now()->subMinutes(30),
@@ -226,30 +226,70 @@ it('reshapes the dashboard for today, showing currently-on-site instead of retur
 
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
-    Livewire::withQueryParams(['range' => 'today'])
-        ->test('pages::overview')
-        ->assertSet('rangeKey', 'today')
-        // Today mode swaps in a live counter for the return-rate KPI.
-        ->assertSee('Currently on site')
-        ->assertDontSee('Return Rate')
-        // Comparison caption changes to "vs yesterday" instead of "vs previous period".
-        ->assertSee('vs yesterday')
-        // Chart row collapses to one "today vs yesterday" chart.
-        ->assertSee('Today, hour by hour')
-        ->assertDontSee('Visits Over Time');
+    foreach (['today', '7d'] as $range) {
+        Livewire::withQueryParams(['range' => $range])
+            ->test('pages::overview')
+            // On Site Now is a live count; it does not depend on the range picker.
+            ->assertSee('On Site Now')
+            // Commercial rename: Unique Vehicles → Unique Visitors.
+            ->assertSee('Unique Visitors')
+            // Return Rate is always the visitor-based rate now, not the
+            // visit-weighted flavour that used to hide behind the same label.
+            ->assertSee('Return Rate')
+            ->assertSee('Average Dwell')
+            ->assertDontSee('add an exit camera for dwell');
+    }
 });
 
-it('shows the multi-period chart layout when today is not selected', function () {
+it('uses the visitor-based Return Rate formula on the dashboard', function () {
+    Camera::factory()->for($this->site)->exit()->create();
+
+    // Two shoppers in the 7-day window; one of them also has a prior visit
+    // before the window opens. The visitor-based Return Rate is therefore
+    // exactly 50% (1 returning / 2 unique). The visit-weighted flavour on
+    // the same data would have reported 0% because neither plate has more
+    // than one visit *inside* the window.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'RETURN01',
+        'entered_at' => Date::now()->subDays(30),
+        'exited_at' => Date::now()->subDays(30)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'RETURN01',
+        'entered_at' => Date::now()->subDays(2),
+        'exited_at' => Date::now()->subDays(2)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'FIRST001',
+        'entered_at' => Date::now()->subDays(1),
+        'exited_at' => Date::now()->subDays(1)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::withQueryParams(['range' => '7d'])
+        ->test('pages::overview')
+        ->assertSee('Return Rate')
+        ->assertSee('50%');
+});
+
+it('shows the multi-day chart layout on 7 days', function () {
     Camera::factory()->for($this->site)->exit()->create();
 
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
-    Livewire::test('pages::overview')
+    Livewire::withQueryParams(['range' => '7d'])
+        ->test('pages::overview')
         ->assertSet('rangeKey', '7d')
-        ->assertSee('Return Rate')
         ->assertSee('Visits Over Time')
         ->assertSee('Visits by Time of Day')
-        ->assertDontSee('Currently on site');
+        ->assertDontSee('Today, hour by hour');
 });
 
 it('narrows the heading and figures to the selected site', function () {
@@ -296,13 +336,12 @@ it('polls on every range so the dashboard stays live without manual refresh', fu
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
     // Cadence is tuned to how fast the underlying numbers can plausibly
-    // change — Today's counters move minute by minute, 90-day aggregates
-    // barely move between polls.
+    // change — Today's counters move minute by minute, a 7-day view moves
+    // more slowly but still needs to be live because On Site Now is on
+    // every dashboard.
     $expected = [
         'today' => 'wire:poll.15s',
         '7d' => 'wire:poll.30s',
-        '30d' => 'wire:poll.60s',
-        '90d' => 'wire:poll.60s',
     ];
 
     foreach ($expected as $range => $directive) {

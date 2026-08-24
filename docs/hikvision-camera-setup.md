@@ -107,8 +107,8 @@ every rule that should feed into CentreVision.
 
 Drive a vehicle past. Within a couple of seconds:
 
-- The Cameras page in CentreVision shows the camera as **Online** and its
-  **Last event** timestamp updates.
+- The Cameras page in CentreVision shows the camera as **Healthy** and its
+  **Last Read** timestamp updates.
 - A row appears in `plate_events` for that camera.
 - If you tail the app log, no `Unparseable Hikvision webhook payload` entry
   appears.

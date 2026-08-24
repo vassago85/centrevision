@@ -390,6 +390,56 @@ it('counts returning vehicles as plates that also visited before the window', fu
         ->and($this->analytics->returningVehicleRate($this->range))->toBe(50.0);
 });
 
+it('return rate is null when the window has no unique visitors', function () {
+    // An empty period should not read as 0% — that would let a quiet day
+    // look worse than one with a single returning shopper.
+    expect($this->analytics->returningVehicleRate($this->range))->toBeNull();
+});
+
+it('return rate leaves staff plates out of both numerator and denominator', function () {
+    // A staff plate seen months ago and again inside the window would flip
+    // return rate to 100% if it slipped through — that's the exact bug the
+    // recurring-tag exclusion is supposed to prevent.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'STAFF001',
+        'entered_at' => Date::now()->subDays(20),
+        'exited_at' => Date::now()->subDays(20)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    visitAt($this->site, 'STAFF001', 2);
+    visitAt($this->site, 'SHOPPER1', 3);
+
+    PlateTag::create([
+        'site_id' => $this->site->id,
+        'plate_number' => 'STAFF001',
+        'tag' => PlateTagType::RecurringPattern,
+        'tagged_at' => now(),
+    ]);
+
+    expect($this->analytics->uniqueVehicles($this->range))->toBe(1)
+        ->and($this->analytics->returningVehicles($this->range))->toBe(0)
+        ->and($this->analytics->returningVehicleRate($this->range))->toBe(0.0);
+});
+
+it('return rate treats prior visits as returning regardless of how long ago they happened', function () {
+    // The commercial Return Rate uses all-time history, not a rolling
+    // window — a shopper who came a year ago and today is still a
+    // returning visitor. If you want a 30-day cap, that lives in
+    // returnRate30Day() and is surfaced as supporting text only.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'LONGAGO1',
+        'entered_at' => Date::now()->subYears(2),
+        'exited_at' => Date::now()->subYears(2)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    visitAt($this->site, 'LONGAGO1', 2);
+
+    expect($this->analytics->returningVehicles($this->range))->toBe(1)
+        ->and($this->analytics->returningVehicleRate($this->range))->toBe(100.0);
+});
+
 it('buckets visit frequency by unique vehicle', function () {
     visitAt($this->site, 'ONCE0001', 2);
     visitAt($this->site, 'TWICE001', 2);

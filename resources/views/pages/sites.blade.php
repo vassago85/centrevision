@@ -2,14 +2,13 @@
 
 use App\Enums\BaseTier;
 use App\Enums\CameraRole;
-use App\Enums\OrganizationType;
-use App\Enums\SubscriptionStatus;
+use App\Enums\VisitStatus;
 use App\Models\Camera;
-use App\Models\Organization;
 use App\Models\Site;
-use App\Support\Billing\BillingCalculator;
+use App\Models\Visit;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Date;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -169,6 +168,9 @@ new #[Title('Sites')] class extends Component
             return collect();
         }
 
+        // One query per fact, keyed by site id — the site card wants a
+        // business snapshot (cameras online, visits today, on site now)
+        // rather than a per-site N+1 walk.
         $cameraCounts = Camera::query()
             ->whereIn('site_id', $siteIds)
             ->toBase()
@@ -177,21 +179,35 @@ new #[Title('Sites')] class extends Component
             ->get()
             ->keyBy('site_id');
 
-        $shopCounts = Organization::query()
-            ->where('type', OrganizationType::Shop)
-            ->whereIn('parent_site_id', $siteIds)
+        // "Camera online" for the card mirrors what the Cameras page shows
+        // in its status strip: active and reachable within the stale
+        // window. Reachability lives across three timestamp columns, so
+        // OR them all in a single scan.
+        $staleWindow = now()->subMinutes((int) config('trafficflow.camera_stale_after_minutes'));
+        $cameraOnline = Camera::query()
+            ->whereIn('site_id', $siteIds)
+            ->where('is_active', true)
+            ->where(function ($q) use ($staleWindow) {
+                $q->where('last_event_at', '>=', $staleWindow)
+                    ->orWhere('last_probe_ok_at', '>=', $staleWindow)
+                    ->orWhere('webhook_last_seen_at', '>=', $staleWindow);
+            })
             ->toBase()
-            ->selectRaw('parent_site_id AS site_id, COUNT(*) AS total, COUNT(*) FILTER (WHERE EXISTS (
-                SELECT 1 FROM shop_subscriptions ss
-                WHERE ss.organization_id = organizations.id AND ss.status = ?
-            )) AS paying', [SubscriptionStatus::Active->value])
-            ->groupBy('parent_site_id')
+            ->selectRaw('site_id, COUNT(*) AS online')
+            ->groupBy('site_id')
             ->get()
             ->keyBy('site_id');
 
-        // Freshness signal for the "last event" line — the most recent capture
-        // across any camera at each site, taken from the denormalised column
-        // the ingestion pipeline maintains.
+        // Exit-tracking sites can report on-site now honestly; entry-only
+        // sites can't, and we don't want the card to lie about it.
+        $exitTrackingSiteIds = Camera::query()
+            ->whereIn('site_id', $siteIds)
+            ->whereIn('role', [CameraRole::Exit, CameraRole::Both])
+            ->distinct()
+            ->pluck('site_id')
+            ->flip();
+
+        // Freshness signal for the "last read" line.
         $lastEvent = Camera::query()
             ->whereIn('site_id', $siteIds)
             ->toBase()
@@ -200,27 +216,67 @@ new #[Title('Sites')] class extends Component
             ->get()
             ->keyBy('site_id');
 
-        return $sites->map(function (Site $site) use ($cameraCounts, $shopCounts, $lastEvent) {
-            $cam = $cameraCounts->get($site->id);
-            $shop = $shopCounts->get($site->id);
-            $last = $lastEvent->get($site->id);
+        // Visits today + on-site now, batched per site. Kept off the
+        // TrafficAnalytics service because that layer takes a DateRange
+        // + implicit tenant scope; the sites screen needs an explicit
+        // multi-site rollup instead.
+        $todayStart = now()->startOfDay();
+        $visitsToday = Visit::query()
+            ->withoutGlobalScope(\App\Models\Scopes\SiteScope::class)
+            ->excludingRecurring()
+            ->whereIn('site_id', $siteIds)
+            ->where('entered_at', '>=', $todayStart)
+            ->toBase()
+            ->selectRaw('site_id, COUNT(*) AS visits')
+            ->groupBy('site_id')
+            ->get()
+            ->keyBy('site_id');
 
+        $onSite = Visit::query()
+            ->withoutGlobalScope(\App\Models\Scopes\SiteScope::class)
+            ->excludingRecurring()
+            ->whereIn('site_id', $siteIds)
+            ->where('status', VisitStatus::Open)
+            ->toBase()
+            ->selectRaw('site_id, COUNT(*) AS on_site')
+            ->groupBy('site_id')
+            ->get()
+            ->keyBy('site_id');
+
+        return $sites->map(function (Site $site) use (
+            $cameraCounts,
+            $cameraOnline,
+            $exitTrackingSiteIds,
+            $lastEvent,
+            $visitsToday,
+            $onSite,
+        ) {
+            $cam = $cameraCounts->get($site->id);
+            $last = $lastEvent->get($site->id);
             $activeCameras = (int) ($cam->active ?? 0);
+            $totalCameras = (int) ($cam->total ?? 0);
+            $onlineCameras = (int) ($cameraOnline->get($site->id)->online ?? 0);
+            $hasExit = $exitTrackingSiteIds->has($site->id);
+            $onSiteCount = (int) ($onSite->get($site->id)->on_site ?? 0);
+            $capacity = $site->parkingCapacity();
 
             return (object) [
                 'site' => $site,
-                'cameras_total' => (int) ($cam->total ?? 0),
+                'cameras_total' => $totalCameras,
                 'cameras_active' => $activeCameras,
-                'entrances' => Camera::query()
-                    ->where('site_id', $site->id)
-                    ->whereIn('role', [CameraRole::Entrance, CameraRole::Both])
-                    ->count(),
-                'shops_total' => (int) ($shop->total ?? 0),
-                'shops_paying' => (int) ($shop->paying ?? 0),
+                'cameras_online' => $onlineCameras,
+                'cameras_offline' => max(0, $activeCameras - $onlineCameras),
+                'has_exit_tracking' => $hasExit,
+                'visits_today' => (int) ($visitsToday->get($site->id)->visits ?? 0),
+                'on_site' => $hasExit ? $onSiteCount : null,
+                'capacity' => $capacity,
+                'occupancy_percent' => ($hasExit && $capacity !== null && $capacity > 0)
+                    ? round($onSiteCount / $capacity * 100, 1)
+                    : null,
                 // Metered pricing: the tier reflects the site's live camera
                 // count, and moves as cameras are added or retired.
                 'tier' => BaseTier::forCameraCount($activeCameras),
-                'last_event_at' => $last?->last_event_at ? \Illuminate\Support\Facades\Date::parse($last->last_event_at) : null,
+                'last_event_at' => $last?->last_event_at ? Date::parse($last->last_event_at) : null,
             ];
         });
     }
@@ -295,7 +351,7 @@ new #[Title('Sites')] class extends Component
 
                         <div class="flex flex-col items-end gap-1.5">
                             @if ($isCurrent)
-                                <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">In focus</span>
+                                <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">Current</span>
                             @endif
                             <span class="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                                 {{ $row->tier->label() }} tier
@@ -303,29 +359,58 @@ new #[Title('Sites')] class extends Component
                         </div>
                     </header>
 
-                    <dl class="grid grid-cols-3 gap-3 text-[13px]">
+                    {{-- Camera status strip — a compact business signal that
+                         echoes the top of the Cameras page. Green dot when
+                         everything is talking; red when a device is down. --}}
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+                        @if ($row->cameras_total === 0)
+                            <span class="inline-flex items-center gap-1.5 text-ink-muted">
+                                <span class="size-2 rounded-full bg-surface-2 border border-line"></span>
+                                No cameras yet
+                            </span>
+                        @else
+                            <span class="inline-flex items-center gap-1.5">
+                                <span class="size-2 rounded-full {{ $row->cameras_offline === 0 && $row->cameras_online > 0 ? 'bg-positive' : ($row->cameras_online > 0 ? 'bg-warn' : 'bg-danger') }}"></span>
+                                <span class="font-semibold text-ink">{{ $row->cameras_total }}</span>
+                                <span class="text-ink-2">{{ \Illuminate\Support\Str::plural('camera', $row->cameras_total) }}</span>
+                            </span>
+                            <span class="text-ink-muted">·</span>
+                            <span class="text-ink-2">
+                                <span class="font-semibold {{ $row->cameras_online === $row->cameras_active ? 'text-positive' : 'text-warn' }}">{{ $row->cameras_online }}</span>
+                                / {{ $row->cameras_active }} online
+                            </span>
+                        @endif
+                    </div>
+
+                    <dl class="grid grid-cols-2 gap-3 text-[13px]">
                         <div>
-                            <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Cameras</dt>
-                            <dd class="mt-1 font-semibold text-ink">
-                                {{ $row->cameras_active }}<span class="text-ink-muted"> / {{ $row->cameras_total }}</span>
-                            </dd>
+                            <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Visits today</dt>
+                            <dd class="mt-1 text-[17px] font-semibold text-ink tabular-nums">{{ number_format($row->visits_today) }}</dd>
                         </div>
-                        <div>
-                            <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Entrances</dt>
-                            <dd class="mt-1 font-semibold text-ink">{{ $row->entrances }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Sub-accounts</dt>
-                            <dd class="mt-1 font-semibold text-ink">
-                                {{ $row->shops_paying }}<span class="text-ink-muted"> / {{ $row->shops_total }}</span>
-                            </dd>
-                        </div>
+                        @if ($row->has_exit_tracking)
+                            <div>
+                                <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">On site now</dt>
+                                <dd class="mt-1 text-[17px] font-semibold text-ink tabular-nums">
+                                    {{ number_format($row->on_site) }}
+                                    @if ($row->occupancy_percent !== null)
+                                        <span class="text-[12px] font-normal text-ink-muted">
+                                            · {{ rtrim(rtrim(number_format($row->occupancy_percent, 1), '0'), '.') }}%
+                                        </span>
+                                    @endif
+                                </dd>
+                            </div>
+                        @else
+                            <div>
+                                <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">On site now</dt>
+                                <dd class="mt-1 text-[13px] text-ink-muted">Needs an exit camera</dd>
+                            </div>
+                        @endif
                     </dl>
 
                     <footer class="flex items-center justify-between gap-3 border-t border-line pt-3">
                         <p class="text-[12px] text-ink-muted">
                             @if ($row->last_event_at)
-                                Last event {{ $row->last_event_at->diffForHumans() }}
+                                Last read {{ $row->last_event_at->diffForHumans() }}
                             @else
                                 No traffic recorded
                             @endif
@@ -333,7 +418,7 @@ new #[Title('Sites')] class extends Component
 
                         <div class="flex items-center gap-2">
                             @unless ($isCurrent)
-                                <flux:button size="xs" variant="primary" wire:click="focus({{ $row->site->id }})">Focus here</flux:button>
+                                <flux:button size="xs" variant="primary" wire:click="focus({{ $row->site->id }})">Open site</flux:button>
                             @endunless
                             <flux:button size="xs" variant="ghost" wire:click="edit({{ $row->site->id }})">Rename</flux:button>
                             <flux:button size="xs" variant="ghost" :href="route('cameras')" wire:navigate>Cameras</flux:button>

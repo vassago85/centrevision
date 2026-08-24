@@ -100,6 +100,14 @@ class TrafficAnalytics
      * window. Complementary to repeatVisitorPercentage, which counts the
      * *plates*; this weighs by visit count and answers "what share of our
      * turnstile clicks came from a returning customer?".
+     *
+     * NOTE: This is NOT the product "Return Rate". The commercial Return
+     * Rate shown on Dashboard and Reports is {@see returningVehicleRate()},
+     * which measures unique visitors that were seen *before* the window —
+     * a visitor-level metric with all-time historical lookup. Keep this
+     * method around because a few places (PDF export, entry-only sites)
+     * still expose the visit-weighted flavour, but do not wire it into
+     * anything labelled "Return Rate" in the UI.
      */
     public function returnRatePercentage(DateRange $range): ?float
     {
@@ -125,8 +133,15 @@ class TrafficAnalytics
     }
 
     /**
-     * Average and median dwell, in whole minutes, over closed visits only:
-     * an open visit has no dwell yet and would drag the average down.
+     * Average and median dwell, in whole minutes.
+     *
+     * Only closed visits with a non-null dwell contribute: an open visit
+     * has no dwell yet, and an orphaned visit was never closed by a
+     * matching exit so its dwell is unknown. Neither can inflate the
+     * commercial average. There is no upper-bound cap on dwell — a
+     * legitimately long closed visit (an all-day shopper) contributes
+     * its full duration. Security "long dwell" alerts are surfaced
+     * separately in {@see SecurityAnalytics}.
      *
      * @return array{average: int|null, median: int|null}
      */
@@ -206,9 +221,14 @@ class TrafficAnalytics
     }
 
     /**
-     * Vehicles currently on site (open visits). Not a windowed metric — it is
-     * a live count, so the Today dashboard can show pulse-of-the-day figures
-     * without pretending they're historical.
+     * Vehicles currently on site (open, non-recurring visits).
+     *
+     * Not a windowed metric — it is a live count, powering the Dashboard's
+     * "On Site Now" KPI. Staff/regular plates are excluded via the same
+     * {@see Visit::scopeExcludingRecurring()} filter every commercial
+     * metric uses, so a fleet of employee vehicles cannot make the centre
+     * look full. Entry-only sites (no exit camera) have no meaningful open
+     * visit set, so the Dashboard suppresses this KPI there.
      */
     public function currentlyOnSite(): int
     {
@@ -537,7 +557,13 @@ class TrafficAnalytics
     }
 
     /**
-     * Unique plates in the window that also visited this site before it.
+     * Unique plates in the window that also have at least one visit before
+     * the window opens.
+     *
+     * The historical lookup is deliberately all-time (not capped to N days)
+     * because this powers the "have we seen this shopper before?" metric.
+     * If you need a rolling lookback, use {@see returnRate30Day()} instead.
+     * Staff/regular plates are excluded via the base query.
      */
     public function returningVehicles(DateRange $range): int
     {
@@ -556,7 +582,19 @@ class TrafficAnalytics
     }
 
     /**
-     * Share of unique vehicles in the window that had visited before it.
+     * The product "Return Rate".
+     *
+     * Formula: `returningVehicles($range) / uniqueVehicles($range) * 100`.
+     *
+     * A visitor is "returning" if the same plate has any visit before
+     * `$range->from` (all-time lookup). Both numerator and denominator run
+     * through the shopper base query, so staff/regular-tagged plates are
+     * excluded on both sides. Returns null when the window has no unique
+     * visitors so an empty period does not report 0%.
+     *
+     * Both Dashboard and Reports surface this method under the "Return
+     * Rate" label. The visit-weighted {@see returnRatePercentage()} is
+     * intentionally not the same metric — see its docblock.
      */
     public function returningVehicleRate(DateRange $range): ?float
     {

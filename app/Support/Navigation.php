@@ -40,23 +40,32 @@ class Navigation
     }
 
     /**
-     * @return list<array{label: string, route: string, icon: string, tone?: string}>
+     * @return list<array{label: string, route: string, icon: string, tone?: string, group?: string}>
      */
     protected static function owner(): array
     {
+        // Conceptual groups: Main (business overview) → Operations
+        // (day-to-day sites and cameras) → Security (things that need
+        // attention) → Administration (billing, settings). The `group`
+        // key is picked up by the sidebar to render a subtle divider,
+        // not a heading — the plan explicitly rejected loud section
+        // labels.
         return [
-            ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
-            ['label' => 'Sites', 'route' => 'sites', 'icon' => 'building-office-2'],
-            ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera'],
-            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list'],
+            ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2', 'group' => 'main'],
+            ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar', 'group' => 'main'],
+
+            ['label' => 'Sites', 'route' => 'sites', 'icon' => 'building-office-2', 'group' => 'operations'],
+            ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera', 'group' => 'operations'],
+            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list', 'group' => 'operations'],
+
             // Both Security and Watchlist paint red — they answer the
             // "is something wrong right now?" question, not "how is business?".
-            ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger'],
-            ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger'],
-            ['label' => 'Sub-accounts', 'route' => 'shops', 'icon' => 'user-group'],
-            ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar'],
-            ['label' => 'Billing', 'route' => 'billing', 'icon' => 'credit-card'],
-            ['label' => 'Settings', 'route' => 'settings', 'icon' => 'cog-6-tooth'],
+            ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger', 'group' => 'security'],
+            ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger', 'group' => 'security'],
+
+            ['label' => 'Sub-accounts', 'route' => 'shops', 'icon' => 'user-group', 'group' => 'admin'],
+            ['label' => 'Billing', 'route' => 'billing', 'icon' => 'credit-card', 'group' => 'admin'],
+            ['label' => 'Settings', 'route' => 'settings', 'icon' => 'cog-6-tooth', 'group' => 'admin'],
         ];
     }
 
@@ -75,17 +84,19 @@ class Navigation
      * A hired guard's toolset: watch plates, curate the watchlist, verify a
      * camera is alive. No sites, shops, billing or settings.
      *
-     * @return list<array{label: string, route: string, icon: string, tone?: string}>
+     * @return list<array{label: string, route: string, icon: string, tone?: string, group?: string}>
      */
     protected static function securityOperator(): array
     {
         return [
-            ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2'],
-            ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera'],
-            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list'],
-            ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger'],
-            ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger'],
-            ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar'],
+            ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2', 'group' => 'main'],
+            ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar', 'group' => 'main'],
+
+            ['label' => 'Cameras', 'route' => 'cameras', 'icon' => 'video-camera', 'group' => 'operations'],
+            ['label' => 'Activity', 'route' => 'activity', 'icon' => 'queue-list', 'group' => 'operations'],
+
+            ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger', 'group' => 'security'],
+            ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger', 'group' => 'security'],
         ];
     }
 

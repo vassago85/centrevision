@@ -19,8 +19,13 @@ use Livewire\Component;
 
 new #[Title('Dashboard')] class extends Component
 {
+    /**
+     * Dashboard defaults to Today: it is the "what is happening now" screen,
+     * not a mini-Reports. Longer historical windows live under Reports so
+     * the two surfaces don't feel like duplicates.
+     */
     #[Url(as: 'range', keep: true)]
-    public string $rangeKey = '7d';
+    public string $rangeKey = 'today';
 
     /**
      * When true, public-holiday days are dropped from the "Visits Over Time"
@@ -50,7 +55,7 @@ new #[Title('Dashboard')] class extends Component
         }
 
         if (! array_key_exists($this->rangeKey, DateRange::options())) {
-            $this->rangeKey = '7d';
+            $this->rangeKey = 'today';
         }
 
         $this->normaliseCameraId();
@@ -136,19 +141,17 @@ new #[Title('Dashboard')] class extends Component
 
     /**
      * How often the dashboard re-fetches itself. Today's numbers move minute
-     * by minute so they warrant a tight cadence; ninety-day aggregates barely
-     * shift between polls so a slower interval keeps the database sane. The
-     * browser suspends wire:poll automatically when the tab is backgrounded,
-     * so an idle dashboard costs nothing.
+     * by minute so they warrant a tight cadence; a 7-day view is still
+     * operational — On Site Now is live regardless of the range — but the
+     * historical bars barely move between polls, so a slightly slower
+     * cadence keeps the database sane. The browser suspends wire:poll
+     * automatically when the tab is backgrounded, so an idle dashboard
+     * costs nothing.
      */
     #[Computed]
     public function pollInterval(): string
     {
-        return match ($this->rangeKey) {
-            'today' => '15s',
-            '7d' => '30s',
-            default => '60s',
-        };
+        return $this->rangeKey === 'today' ? '15s' : '30s';
     }
 
     /**
@@ -165,11 +168,15 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * All four KPIs plus their period-over-period comparisons. Fetched in one
-     * place so the view is a straight render, and the labels/comparisons stay
-     * in the same shape.
+     * The Dashboard KPI row. Five cards on an exit-tracking site, led by
+     * "On Site Now" — the whole point of the operational Dashboard is to
+     * answer "how full are we right now?". Entry-only sites cannot answer
+     * that honestly, so their row is a 4-card shape with the substitutes
+     * (Peak hour, Repeat visitors) that DO work without exit cameras.
      *
-     * @return array<string, mixed>
+     * All five cards share the same shape so the view is a straight loop.
+     *
+     * @return array<int, array<string, mixed>>
      */
     #[Computed]
     public function kpis(): array
@@ -184,100 +191,105 @@ new #[Title('Dashboard')] class extends Component
         $unique = $a->uniqueVehicles($range);
         $prevUnique = $a->uniqueVehicles($previous);
 
-        $dwell = $a->dwellSummary($range);
-        $prevDwell = $a->dwellSummary($previous);
-
         $vsLabel = $this->isToday ? 'vs yesterday' : 'vs previous period';
 
-        // Card 3 — Currently on site (today, with exits) / Return Rate
-        // (multi-day) / Peak hour (entries-only). A site without an exit
-        // camera cannot say "on site now" honestly, so we swap in a peak
-        // hour instead of pretending everyone that entered is still here.
-        if (! $this->hasExitTracking) {
-            $peak = $a->peakHour($range);
-
-            $thirdCard = [
-                'label' => 'Peak hour',
-                'value' => $peak === null ? '—' : $peak['label'],
-                'icon' => 'chart-bar',
-                'compare' => ['label' => $peak === null ? 'No arrivals yet' : $peak['count'].' visits', 'tone' => 'muted'],
-                'vs' => 'busiest hour in period',
-            ];
-        } elseif ($this->isToday) {
-            $onSite = $a->currentlyOnSite();
-            $peak = $a->peakHour($range);
-            $occupancy = $a->occupancyPercent();
-            $site = app(Tenancy::class)->currentSite();
-            $capacity = $site?->parkingCapacity();
-
-            $thirdCard = [
-                'label' => $occupancy === null ? 'Currently on site' : 'Occupancy',
-                'value' => $occupancy === null
-                    ? number_format($onSite)
-                    : rtrim(rtrim(number_format($occupancy, 1), '0'), '.').'%',
-                'icon' => 'map-pin',
-                'compare' => [
-                    'label' => $occupancy === null
-                        ? ($onSite === 0 ? 'No open visits' : 'Live')
-                        : number_format($onSite).' / '.number_format($capacity).' bays',
-                    'tone' => $onSite === 0 ? 'muted' : 'up',
-                ],
-                'vs' => $peak === null ? 'No arrivals yet today' : 'Busiest hour: '.$peak['label'],
-            ];
-        } else {
-            $returnRate = $a->returnRatePercentage($range);
-            $prevReturn = $a->returnRatePercentage($previous);
-
-            $thirdCard = [
-                'label' => 'Return Rate',
-                'value' => $returnRate === null ? '—' : $returnRate.'%',
-                'icon' => 'arrow-path',
-                'compare' => $a->comparison($returnRate, $prevReturn),
-                'vs' => 'excluding staff plates',
-            ];
-        }
-
-        // Card 4 — Avg Dwell (with exits) / Repeat visitors (entries-only).
-        // Dwell is undefined without exits, so entries-only gets a figure
-        // it can actually compute.
-        if (! $this->hasExitTracking) {
-            $repeat = $a->repeatVisitorPercentage($range);
-
-            $fourthCard = [
-                'label' => 'Repeat visitors',
-                'value' => $repeat === null ? '—' : $repeat.'%',
-                'icon' => 'arrow-path',
-                'compare' => ['label' => $repeat === null ? 'No prior data' : 'plates seen 2+ times', 'tone' => 'muted'],
-                'vs' => 'add an exit camera for dwell',
-            ];
-        } else {
-            $fourthCard = [
-                'label' => 'Avg Dwell Time',
-                'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
-                'icon' => 'clock',
-                'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
-                'vs' => 'median '.($dwell['median'] ?? '—').' min',
-            ];
-        }
-
-        // Everything gets the same shape so the view is a data-driven loop.
-        return [
+        $visitorCards = [
             [
-                'label' => 'Total Visits',
+                'label' => $this->isToday ? 'Visits Today' : 'Visits',
                 'value' => number_format($visits),
                 'icon' => 'truck',
                 'compare' => $a->comparison($visits, $prevVisits),
                 'vs' => $vsLabel,
             ],
             [
-                'label' => 'Unique Vehicles',
+                'label' => 'Unique Visitors',
                 'value' => number_format($unique),
                 'icon' => 'user-group',
                 'compare' => $a->comparison($unique, $prevUnique),
                 'vs' => $vsLabel,
             ],
-            $thirdCard,
-            $fourthCard,
+        ];
+
+        // Entry-only sites: no "On Site Now" or dwell to report. Keep the
+        // honest substitutes we already had — peak hour + repeat visitors —
+        // so the row still says something useful.
+        if (! $this->hasExitTracking) {
+            $peak = $a->peakHour($range);
+            $repeat = $a->repeatVisitorPercentage($range);
+
+            return [
+                ...$visitorCards,
+                [
+                    'label' => 'Peak hour',
+                    'value' => $peak === null ? '—' : $peak['label'],
+                    'icon' => 'chart-bar',
+                    'compare' => ['label' => $peak === null ? 'No arrivals yet' : $peak['count'].' visits', 'tone' => 'muted'],
+                    'vs' => 'busiest hour in period',
+                ],
+                [
+                    'label' => 'Repeat visitors',
+                    'value' => $repeat === null ? '—' : $repeat.'%',
+                    'icon' => 'arrow-path',
+                    'compare' => ['label' => $repeat === null ? 'No prior data' : 'plates seen 2+ times', 'tone' => 'muted'],
+                    'vs' => 'add an exit camera for dwell',
+                ],
+            ];
+        }
+
+        // Exit-tracking sites: On Site Now is always the lead KPI regardless
+        // of the range picker — it is a live count, not a windowed one, so
+        // it stays accurate whether the user is looking at "today" or the
+        // last seven days.
+        $onSite = $a->currentlyOnSite();
+        $occupancy = $a->occupancyPercent();
+        $site = app(Tenancy::class)->currentSite();
+        $capacity = $site?->parkingCapacity();
+
+        $onSiteCard = [
+            'label' => 'On Site Now',
+            'value' => number_format($onSite),
+            'icon' => 'map-pin',
+            'compare' => [
+                'label' => $onSite === 0 ? 'No open visits' : 'Live',
+                'tone' => $onSite === 0 ? 'muted' : 'up',
+            ],
+            // Occupancy is supporting text, not a competing KPI: capacity
+            // is optional and many sites will not have it configured.
+            'vs' => $occupancy === null
+                ? ($capacity === null ? 'Set parking capacity to see occupancy' : 'Live')
+                : number_format($onSite).' / '.number_format($capacity).' spaces · '.rtrim(rtrim(number_format($occupancy, 1), '0'), '.').'% occupancy',
+        ];
+
+        // Both Dashboard and Reports use the visitor-based Return Rate
+        // (returningVehicleRate) so the two surfaces cannot disagree on
+        // the same label.
+        $returnRate = $a->returningVehicleRate($range);
+        $prevReturn = $a->returningVehicleRate($previous);
+
+        $returnCard = [
+            'label' => 'Return Rate',
+            'value' => $returnRate === null ? '—' : $returnRate.'%',
+            'icon' => 'arrow-path',
+            'compare' => $a->comparison($returnRate, $prevReturn),
+            'vs' => 'visitors seen before this period',
+        ];
+
+        $dwell = $a->dwellSummary($range);
+        $prevDwell = $a->dwellSummary($previous);
+
+        $dwellCard = [
+            'label' => 'Average Dwell',
+            'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
+            'icon' => 'clock',
+            'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
+            'vs' => 'median '.($dwell['median'] ?? '—').' min',
+        ];
+
+        return [
+            $onSiteCard,
+            ...$visitorCards,
+            $returnCard,
+            $dwellCard,
         ];
     }
 
@@ -622,7 +634,7 @@ new #[Title('Dashboard')] class extends Component
          manual refresh. --}}
     <x-dashboard-header
         :title="$this->heading"
-        :subtitle="'Vehicle traffic · '.strtolower($this->range->label)"
+        :subtitle="'What is happening at your centre · '.strtolower($this->range->label)"
         :alert-count="$this->canSeeSecurity ? $this->alertCounts['total'] : 0"
         :show-bell="$this->canSeeSecurity"
         live
@@ -636,8 +648,15 @@ new #[Title('Dashboard')] class extends Component
         </x-slot:actions>
     </x-dashboard-header>
 
-    {{-- ── KPI row ────────────────────────────────────────────────────── --}}
-    <div class="mb-6 grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+    {{-- ── KPI row ──────────────────────────────────────────────────────
+         Five cards on an exit-tracking site (led by On Site Now), four on
+         an entry-only site. The grid wraps to two columns below xl so the
+         cards never squeeze, and to one column on phones. --}}
+    <div @class([
+        'mb-6 grid gap-4 max-sm:grid-cols-1',
+        'grid-cols-5 max-xl:grid-cols-3 max-lg:grid-cols-2' => count($this->kpis) === 5,
+        'grid-cols-4 max-xl:grid-cols-2' => count($this->kpis) !== 5,
+    ])>
         @foreach ($this->kpis as $kpi)
             <x-kpi-card
                 :label="$kpi['label']"

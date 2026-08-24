@@ -300,6 +300,72 @@ new #[Title('Cameras')] class extends Component {
 
         return ['tone' => 'danger', 'label' => $camera->last_event_at === null ? 'Never seen' : 'Unreachable'];
     }
+
+    /**
+     * Health is the row-level rollup that answers "is this camera doing
+     * its job?". Three states, with a matching badge tone:
+     *
+     * - Healthy: active and reachable.
+     * - Stale: active, previously seen, but silent past the stale window.
+     * - Offline: inactive, or never-seen / unreachable.
+     *
+     * Split out from {@see status()} because status() is fine-grained
+     * (Online / Never seen / Unreachable / Disabled), while the monitoring
+     * table only needs three buckets a security operator can act on.
+     *
+     * @return array{tone: string, label: string}
+     */
+    public function health(Camera $camera): array
+    {
+        if (! $camera->is_active) {
+            return ['tone' => 'danger', 'label' => 'Offline'];
+        }
+
+        if ($camera->isReachable()) {
+            return ['tone' => 'positive', 'label' => 'Healthy'];
+        }
+
+        if ($camera->last_event_at === null) {
+            return ['tone' => 'danger', 'label' => 'Offline'];
+        }
+
+        return ['tone' => 'warn', 'label' => 'Stale'];
+    }
+
+    /**
+     * Summary counts for the compact status strip at the top of the page.
+     * "Offline" here folds in inactive + never-seen + unreachable so a
+     * security operator only sees the three buckets that matter to them.
+     *
+     * @return array{cameras: int, online: int, offline: int, stale: int, reads_today: int}
+     */
+    #[Computed]
+    public function fleetSummary(): array
+    {
+        $online = 0;
+        $stale = 0;
+        $offline = 0;
+
+        foreach ($this->cameras as $camera) {
+            $tone = $this->health($camera)['tone'];
+
+            if ($tone === 'positive') {
+                $online++;
+            } elseif ($tone === 'warn') {
+                $stale++;
+            } else {
+                $offline++;
+            }
+        }
+
+        return [
+            'cameras' => $this->cameras->count(),
+            'online' => $online,
+            'stale' => $stale,
+            'offline' => $offline,
+            'reads_today' => (int) $this->cameras->sum('events_today'),
+        ];
+    }
 }; ?>
 
 <div>
@@ -320,19 +386,48 @@ new #[Title('Cameras')] class extends Component {
         </div>
     @endunless
 
-    <div class="mb-7 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        <x-metric label="Cameras" :value="$this->cameras->count()" />
-        <x-metric
-            label="Online"
-            :value="$this->cameras->filter(fn ($camera) => $camera->is_active && $camera->isReachable())->count()"
-            :delta="'Stale after '.config('trafficflow.camera_stale_after_minutes').' minutes'"
-        />
-        <x-metric label="Events today" :value="number_format($this->cameras->sum('events_today'))" />
+    {{-- Compact status strip — a single line the operator can read at a
+         glance. The full-width metric cards used to eat half the screen
+         above a mostly-empty table; on a monitoring page the table is
+         the point, so we keep the summary small. --}}
+    @php $summary = $this->fleetSummary; @endphp
+    <div class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-tf border border-line bg-surface px-4 py-3 text-[13px] shadow-tf-sm">
+        <span class="inline-flex items-center gap-1.5">
+            <flux:icon icon="video-camera" class="size-4 text-ink-muted" />
+            <span class="font-semibold text-ink tabular-nums">{{ $summary['cameras'] }}</span>
+            <span class="text-ink-2">{{ \Illuminate\Support\Str::plural('Camera', $summary['cameras']) }}</span>
+        </span>
+        <span class="text-ink-muted">·</span>
+        <span class="inline-flex items-center gap-1.5" title="Reachable within the last {{ config('trafficflow.camera_stale_after_minutes') }} minutes">
+            <span class="size-2 rounded-full bg-positive"></span>
+            <span class="font-semibold text-positive tabular-nums">{{ $summary['online'] }}</span>
+            <span class="text-ink-2">Online</span>
+        </span>
+        @if ($summary['stale'] > 0)
+            <span class="text-ink-muted">·</span>
+            <span class="inline-flex items-center gap-1.5" title="Active but silent past the stale window">
+                <span class="size-2 rounded-full bg-warn"></span>
+                <span class="font-semibold text-warn tabular-nums">{{ $summary['stale'] }}</span>
+                <span class="text-ink-2">Stale</span>
+            </span>
+        @endif
+        <span class="text-ink-muted">·</span>
+        <span class="inline-flex items-center gap-1.5">
+            <span class="size-2 rounded-full {{ $summary['offline'] > 0 ? 'bg-danger' : 'bg-surface-2 border border-line' }}"></span>
+            <span class="font-semibold {{ $summary['offline'] > 0 ? 'text-danger' : 'text-ink' }} tabular-nums">{{ $summary['offline'] }}</span>
+            <span class="text-ink-2">Offline</span>
+        </span>
+        <span class="text-ink-muted">·</span>
+        <span class="inline-flex items-center gap-1.5">
+            <flux:icon icon="signal" class="size-4 text-ink-muted" />
+            <span class="font-semibold text-ink tabular-nums">{{ number_format($summary['reads_today']) }}</span>
+            <span class="text-ink-2">Reads today</span>
+        </span>
     </div>
 
     <x-panel heading="Devices">
         <x-data-table
-            :headers="['Camera', 'Site', 'Role', 'Mode', 'Status', 'Last event', ['label' => '', 'align' => 'right']]"
+            :headers="['Camera', 'Site', 'Direction', 'Connection', 'Health', ['label' => 'Reads Today', 'align' => 'right'], 'Last Read', ['label' => '', 'align' => 'right']]"
             :is-empty="$this->cameras->isEmpty()"
             empty="No cameras yet. Add the first one to start ingesting plates."
         >
@@ -341,7 +436,7 @@ new #[Title('Cameras')] class extends Component {
                     // Block form on purpose: the single-expression @php(...) form
                     // miscompiles when it sits immediately after Livewire's
                     // wire:key loop-iteration shim.
-                    $status = $this->status($camera);
+                    $health = $this->health($camera);
                 @endphp
 
                 <tr wire:key="camera-{{ $camera->id }}">
@@ -367,7 +462,10 @@ new #[Title('Cameras')] class extends Component {
                         </x-badge>
                     </td>
                     <td class="border-b border-line py-2">
-                        <x-badge :tone="$status['tone']">{{ $status['label'] }}</x-badge>
+                        <x-badge :tone="$health['tone']">{{ $health['label'] }}</x-badge>
+                    </td>
+                    <td class="border-b border-line py-2 text-right tabular-nums {{ ($camera->events_today ?? 0) === 0 ? 'text-ink-muted' : 'text-ink-2' }}">
+                        {{ number_format($camera->events_today ?? 0) }}
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">
                         {{ $camera->last_event_at?->diffForHumans() ?? '—' }}
@@ -668,7 +766,7 @@ new #[Title('Cameras')] class extends Component {
                             <span class="font-medium text-ink">Notify Surveillance Center</span> (some firmware labels this row
                             <span class="font-medium text-ink">HTTP Listening</span>) for every detection rule.
                         </li>
-                        <li>Save. Drive a plate past and watch the "Last event" column on this page tick over.</li>
+                        <li>Save. Drive a plate past and watch the "Last Read" column on this page tick over.</li>
                     </ol>
                 </div>
 

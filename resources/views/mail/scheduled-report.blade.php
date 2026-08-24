@@ -6,7 +6,7 @@
 <x-mail::table>
 | Metric | Value |
 | :----- | ----: |
-| Total visits | {{ number_format($summary['total']) }} |
+| Visits | {{ number_format($summary['total']) }} |
 | Daily average | {{ number_format($summary['daily_average']) }} |
 | Average dwell | {{ $summary['average_dwell'] === null ? '—' : $summary['average_dwell'].' min' }} |
 | Peak hour | {{ $summary['peak_hour'] ?? '—' }} |

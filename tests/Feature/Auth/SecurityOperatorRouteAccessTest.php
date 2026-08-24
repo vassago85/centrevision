@@ -47,3 +47,19 @@ it('does not offer sites, shops, billing or settings in the navigation', functio
 it('lands an operator on the dashboard rather than the sites page', function () {
     expect(Navigation::homeRouteFor($this->operator))->toBe('overview');
 });
+
+it('groups Dashboard and Reports together at the top of the operator nav', function () {
+    // The reorder puts Reports next to Dashboard so it feels like a
+    // business-intelligence surface rather than an admin tab. Operations
+    // (Cameras, Activity) come next; security work last.
+    $labels = collect(Navigation::for($this->operator))->pluck('label')->all();
+
+    expect($labels)->toBe([
+        'Dashboard',
+        'Reports',
+        'Cameras',
+        'Activity',
+        'Security',
+        'Watchlist',
+    ]);
+});

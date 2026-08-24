@@ -7,16 +7,16 @@ beforeEach(function () {
     Date::setTestNow('2026-08-24 15:30:00');
 });
 
-it('keeps the live dashboard period list unchanged', function () {
+it('offers only today and last 7 days on the live dashboard', function () {
+    // Longer windows (30d / 90d / month) live on Reports so Dashboard stays
+    // "what is happening now" rather than a second historical view.
     expect(DateRange::options())->toBe([
         'today' => 'Today',
         '7d' => 'Last 7 days',
-        '30d' => 'Last 30 days',
-        '90d' => 'Last 90 days',
     ]);
 });
 
-it('adds reporting windows without replacing the dashboard list', function () {
+it('keeps the wider reporting window list independent of the dashboard', function () {
     expect(DateRange::reportOptions())->toHaveKeys([
         'today', 'yesterday', '7d', '30d', 'this_month', 'last_month', 'custom',
     ]);

@@ -97,3 +97,56 @@ it('lets a security operator hired by the owner add and remove plates', function
     Livewire::test('pages::watchlist')->call('remove', $entry->id);
     expect(WatchlistPlate::count())->toBe(0);
 });
+
+it('renders one compact empty state when the watchlist is empty', function () {
+    // The old page rendered three big "no entries" boxes stacked on top
+    // of each other; the redesign consolidates them into a single, small
+    // empty state with a clear call to action.
+    Livewire::test('pages::watchlist')
+        ->assertSee('No plates on your watchlist')
+        ->assertSee('Add a plate to be notified')
+        // No per-kind panels when there is nothing to show.
+        ->assertDontSee('Watchlist (0)');
+});
+
+it('filters entries by kind through the filter chips', function () {
+    // Plates without the letters/digits/letters SA pattern stay as-is
+    // through PlateNumber::forDisplay, which is what we want here — the
+    // test is about the filter, not plate formatting.
+    WatchlistPlate::factory()->block()->for($this->site)->create(['plate_number' => 'BLOCKONE']);
+    WatchlistPlate::factory()->watch()->for($this->site)->create(['plate_number' => 'WATCHONE']);
+    WatchlistPlate::factory()->vip()->for($this->site)->create(['plate_number' => 'VIPONE01']);
+
+    Livewire::test('pages::watchlist')
+        // Default filter shows everything in one table.
+        ->assertSee('BLOCKONE')
+        ->assertSee('WATCHONE')
+        ->assertSee('VIPONE01')
+        ->set('filter', 'block')
+        ->assertSee('BLOCKONE')
+        ->assertDontSee('WATCHONE')
+        ->assertDontSee('VIPONE01')
+        ->set('filter', 'watch')
+        ->assertSee('WATCHONE')
+        ->assertDontSee('BLOCKONE');
+});
+
+it('exposes an "expired" filter that only lists past-expiry entries', function () {
+    WatchlistPlate::factory()->watch()->for($this->site)->create([
+        'plate_number' => 'ACTIVEONE',
+        'expires_at' => Date::now()->addDays(10),
+    ]);
+    // The factory allows a past expires_at directly; the validation guard
+    // on the form only runs when a human submits it. This simulates an
+    // entry that aged past its expiry without being cleaned up yet.
+    WatchlistPlate::factory()->watch()->for($this->site)->create([
+        'plate_number' => 'STALEONE',
+        'expires_at' => Date::now()->subDays(2),
+    ]);
+
+    Livewire::withQueryParams(['filter' => 'expired'])
+        ->test('pages::watchlist')
+        ->assertSet('filter', 'expired')
+        ->assertSee('STALEONE')
+        ->assertDontSee('ACTIVEONE');
+});

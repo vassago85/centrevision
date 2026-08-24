@@ -24,6 +24,21 @@ it('lists every site the tenant reaches with a camera count', function () {
         ->assertSee('Mall B');
 });
 
+it('exposes the operational snapshot on each site card', function () {
+    // Site cards used to be an administrative dump (entrances /
+    // sub-accounts / tier). Now they answer "how is this site
+    // trading right now?" — visits today, on-site now, camera
+    // status, last read.
+    Livewire::test('pages::sites')
+        ->assertSee('Visits today')
+        ->assertSee('On site now')
+        // The old "Focus here" verb is gone — the new label is "Open
+        // site", which is what the button actually does.
+        ->assertSee('Open site')
+        ->assertDontSee('Focus here')
+        ->assertDontSee('Last event');
+});
+
 it('pins the site switcher when focusing a site', function () {
     Livewire::test('pages::sites')
         ->call('focus', $this->siteB->id)

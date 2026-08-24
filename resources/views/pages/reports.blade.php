@@ -151,6 +151,14 @@ new #[Title('Reports')] class extends Component {
         return $this->analytics()->visitsByDay($this->range());
     }
 
+    /**
+     * The Reports overview headline row. Kept deliberately short — five
+     * cards that answer the "how did the centre trade?" question.
+     * Everything else lives in {@see secondaryKpis()} so the row above
+     * this one is not competing with itself.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     #[Computed]
     public function kpis(): array
     {
@@ -160,29 +168,42 @@ new #[Title('Reports')] class extends Component {
 
         $visits = $a->totalVisits($range);
         $unique = $a->uniqueVehicles($range);
-        $returning = $a->returningVehicles($range);
         $returnRate = $a->returningVehicleRate($range);
         $dwell = $a->dwellSummary($range);
-        $peak = $a->peakHour($range);
-        $excluded = $a->excludedVisitCount($range);
 
-            $busiest = $this->daily()->sortByDesc('count')->first();
+        $daysInRange = max(1, $this->daily()->count());
+        $dailyAverage = (int) round($visits / $daysInRange);
+        $prevDailyAverage = $previous
+            ? $a->totalVisits($previous) / max(1, $previous->days())
+            : null;
 
-        $cards = [
-            $this->kpi('Total visits', number_format($visits), $visits, $previous ? $a->totalVisits($previous) : null, null, 'truck'),
-            $this->kpi('Unique vehicles', number_format($unique), $unique, $previous ? $a->uniqueVehicles($previous) : null, null, 'user-group'),
-            $this->kpi('Returning vehicles', number_format($returning), $returning, $previous ? $a->returningVehicles($previous) : null, null, 'arrow-path'),
-            $this->kpi('Return rate', $returnRate === null ? '—' : $returnRate.'%', $returnRate, $previous ? $a->returningVehicleRate($previous) : null, null, 'arrow-path'),
+        return [
             $this->kpi(
-                'Busiest day',
-                $busiest['label'] ?? '—',
+                'Visits',
+                number_format($visits),
+                $visits,
+                $previous ? $a->totalVisits($previous) : null,
                 null,
-                null,
-                $busiest ? number_format($busiest['count']).' vehicles' : null,
-                'calendar-days',
+                'truck',
             ),
             $this->kpi(
-                'Avg dwell',
+                'Unique Visitors',
+                number_format($unique),
+                $unique,
+                $previous ? $a->uniqueVehicles($previous) : null,
+                null,
+                'user-group',
+            ),
+            $this->kpi(
+                'Return Rate',
+                $returnRate === null ? '—' : $returnRate.'%',
+                $returnRate,
+                $previous ? $a->returningVehicleRate($previous) : null,
+                null,
+                'arrow-path',
+            ),
+            $this->kpi(
+                'Average Dwell',
                 $dwell['average'] === null ? '—' : $dwell['average'].' min',
                 $dwell['average'],
                 $previous ? $a->dwellSummary($previous)['average'] : null,
@@ -190,57 +211,62 @@ new #[Title('Reports')] class extends Component {
                 'clock',
             ),
             $this->kpi(
-                'Median dwell',
-                $dwell['median'] === null ? '—' : $dwell['median'].' min',
-                $dwell['median'],
-                $previous ? $a->dwellSummary($previous)['median'] : null,
-                null,
-                'clock',
-            ),
-            $this->kpi(
-                'Peak hour',
-                $peak['label'] ?? '—',
-                $peak['count'] ?? null,
-                null,
-                $peak === null ? null : number_format($peak['count']).' visits',
-                'chart-bar',
-            ),
-            $this->kpi(
-                'Daily average',
-                number_format((int) round($visits / max(1, $this->daily()->count()))),
-                $visits / max(1, $this->daily()->count()),
-                $previous ? $a->totalVisits($previous) / max(1, $previous->days()) : null,
+                'Daily Average',
+                number_format($dailyAverage),
+                $dailyAverage,
+                $prevDailyAverage,
                 null,
                 'chart-bar',
             ),
-            $this->kpi('Staff / regular visits excluded', number_format($excluded), $excluded, $previous ? $a->excludedVisitCount($previous) : null, null, 'minus-circle'),
         ];
+    }
 
-        if ($this->hasOccupancy) {
-            $occupancy = $this->occupancy()->summary($range);
-            $prevOccupancy = $previous ? $this->occupancy()->summary($previous) : null;
+    /**
+     * Supporting metrics — busiest day, peak hour, median dwell, excluded
+     * staff visits, returning-visitor count. All useful, none big enough
+     * to deserve a full KPI card. Rendered as compact {@see \Illuminate\View\ComponentAttributeBag metric} rows so they
+     * do not visually compete with Visits or Unique Visitors above.
+     *
+     * @return array<int, array<string, string|int|null>>
+     */
+    #[Computed]
+    public function secondaryKpis(): array
+    {
+        $range = $this->range();
+        $a = $this->analytics();
+        $dwell = $a->dwellSummary($range);
+        $peak = $a->peakHour($range);
+        $busiest = $this->daily()->sortByDesc('count')->first();
+        $excluded = $a->excludedVisitCount($range);
+        $returning = $a->returningVehicles($range);
 
-            array_splice($cards, 7, 0, [
-                $this->kpi(
-                    'Peak occupancy',
-                    $occupancy === null ? '—' : number_format($occupancy['peak']),
-                    $occupancy['peak'] ?? null,
-                    $prevOccupancy['peak'] ?? null,
-                    $occupancy === null ? null : 'of '.number_format($occupancy['capacity']).' bays',
-                    'map-pin',
-                ),
-                $this->kpi(
-                    'Parking pressure',
-                    $occupancy === null ? '—' : $occupancy['parking_pressure'].' above 80%',
-                    $occupancy['minutes_above_80'] ?? null,
-                    $prevOccupancy['minutes_above_80'] ?? null,
-                    null,
-                    'bell-alert',
-                ),
-            ]);
-        }
-
-        return $cards;
+        return [
+            [
+                'label' => 'Busiest day',
+                'value' => $busiest['label'] ?? '—',
+                'detail' => $busiest ? number_format($busiest['count']).' visits' : null,
+            ],
+            [
+                'label' => 'Peak hour',
+                'value' => $peak['label'] ?? '—',
+                'detail' => $peak === null ? null : number_format($peak['count']).' visits',
+            ],
+            [
+                'label' => 'Median dwell',
+                'value' => $dwell['median'] === null ? '—' : $dwell['median'].' min',
+                'detail' => null,
+            ],
+            [
+                'label' => 'Returning visitors',
+                'value' => number_format($returning),
+                'detail' => null,
+            ],
+            [
+                'label' => 'Staff / regular excluded',
+                'value' => number_format($excluded),
+                'detail' => null,
+            ],
+        ];
     }
 
     #[Computed]
@@ -540,7 +566,11 @@ new #[Title('Reports')] class extends Component {
     </div>
 
     @if (in_array($section, ['overview', 'visits'], true))
-        <div class="mb-6 grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+        {{-- Primary KPI row — the five figures a landlord opens Reports for.
+             Kept intentionally short so Visits and Unique Visitors get room
+             to breathe; everything supporting sits in the compact secondary
+             strip below. --}}
+        <div class="mb-4 grid grid-cols-5 gap-4 max-xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
             @foreach ($this->kpis as $card)
                 <x-kpi-card
                     :label="$card['label']"
@@ -550,6 +580,18 @@ new #[Title('Reports')] class extends Component {
                     :delta-tone="$card['tone']"
                     :comparison="$card['comparison']"
                 />
+            @endforeach
+        </div>
+
+        <div class="mb-6 grid grid-cols-5 gap-3 max-xl:grid-cols-3 max-md:grid-cols-2 max-sm:grid-cols-1">
+            @foreach ($this->secondaryKpis as $secondary)
+                <div class="rounded-tf border border-line bg-surface-2 px-3 py-2.5">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">{{ $secondary['label'] }}</p>
+                    <p class="mt-1 text-[15px] font-semibold text-ink tabular-nums">{{ $secondary['value'] }}</p>
+                    @if ($secondary['detail'])
+                        <p class="text-[11.5px] text-ink-muted">{{ $secondary['detail'] }}</p>
+                    @endif
+                </div>
             @endforeach
         </div>
     @endif
@@ -566,7 +608,7 @@ new #[Title('Reports')] class extends Component {
                 <div class="flex items-center gap-2">
                     <flux:select wire:model.live="chartMetric" size="sm" class="min-w-40" label="Metric" label:sr-only>
                         <flux:select.option value="visits">Visits</flux:select.option>
-                        <flux:select.option value="unique">Unique vehicles</flux:select.option>
+                        <flux:select.option value="unique">Unique visitors</flux:select.option>
                         <flux:select.option value="entries">Entries</flux:select.option>
                         <flux:select.option value="exits">Exits</flux:select.option>
                         @if ($this->hasOccupancy)
@@ -648,8 +690,8 @@ new #[Title('Reports')] class extends Component {
             <x-panel-card>
                 <x-slot:header>
                     <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">By hour of day</p>
-                        <p class="mt-1 text-sm text-ink-2">Average arrivals across the period</p>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Total visits by hour</p>
+                        <p class="mt-1 text-sm text-ink-2">Every hour, added up across the whole period</p>
                     </div>
                 </x-slot:header>
                 <x-chart
@@ -807,7 +849,7 @@ new #[Title('Reports')] class extends Component {
                     :labels="$this->analytics->visitFrequency($this->range)->pluck('label')->all()"
                     :values="$this->analytics->visitFrequency($this->range)->pluck('count')->all()"
                     :height="220"
-                    aria-label="Unique vehicles by visit frequency"
+                    aria-label="Unique visitors by visit frequency"
                 />
             </x-panel-card>
 
@@ -815,10 +857,10 @@ new #[Title('Reports')] class extends Component {
                 <x-slot:header>
                     <div>
                         <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Frequency breakdown</p>
-                        <p class="mt-1 text-sm text-ink-2">Unique vehicles, not plates</p>
+                        <p class="mt-1 text-sm text-ink-2">Unique visitors, not plates</p>
                     </div>
                 </x-slot:header>
-                <x-data-table :headers="['Visits', ['label' => 'Vehicles', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
+                <x-data-table :headers="['Visits', ['label' => 'Visitors', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
                     @foreach ($this->analytics->visitFrequency($this->range) as $bucket)
                         <tr wire:key="freq-{{ $bucket['label'] }}">
                             <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>

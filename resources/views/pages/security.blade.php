@@ -285,28 +285,44 @@ new #[Title('Security')] class extends Component {
         </div>
     @endif
 
+    {{-- Operational status row. Severity is deliberately conservative:
+         danger only when Over Dwell has entries, warn only when Odd Hour /
+         Multi-entry have entries, and Missing Exit stays neutral even at
+         high counts. Missing exits are almost always a pairing/camera
+         problem, not a security incident, so we surface the count with a
+         helper link to Data Quality rather than painting the card red. --}}
     <div class="mb-7 grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
         <x-metric
-            label="Over threshold now"
+            label="Over Dwell"
             :value="$this->overThreshold->count()"
             :variant="$this->overThreshold->isEmpty() ? 'default' : 'danger'"
-            :delta="$this->isEntryOnly ? 'requires exit camera' : null"
+            :delta="$this->isEntryOnly ? 'requires exit camera' : 'above '.$thresholdHours.'h on site'"
         />
         <x-metric
-            label="Odd-hour recurring"
+            label="Odd Hour"
             :value="$this->oddHour->count()"
+            :variant="$this->oddHour->isEmpty() ? 'default' : 'warn'"
             :delta="'last '.config('trafficflow.security.odd_hour_window_days').' days'"
         />
         <x-metric
-            label="Multi-entry today"
+            label="Multi-entry"
             :value="$this->multiEntry->count()"
+            :variant="$this->multiEntry->isEmpty() ? 'default' : 'warn'"
             :delta="config('trafficflow.security.multi_entry_threshold').'+ entries, same plate'"
         />
-        <x-metric
-            label="No exit recorded"
-            :value="$this->security->orphanedCount(7, $this->cameraId)"
-            :delta="$this->isEntryOnly ? 'requires exit camera' : 'last 7 days'"
-        />
+        @php $missingExit = $this->security->orphanedCount(7, $this->cameraId); @endphp
+        <a
+            href="{{ route('reports', ['section' => 'quality']) }}"
+            wire:navigate
+            class="group block rounded-tf bg-surface-2 p-4 text-left transition-colors hover:bg-surface-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            title="Missing exits are usually a camera or pairing problem. Data Quality has the diagnosis."
+        >
+            <p class="mb-1 text-[13px] text-ink-2">Missing Exit</p>
+            <p class="text-[26px] font-semibold leading-tight text-ink tabular-nums">{{ number_format($missingExit) }}</p>
+            <p class="mt-1.5 text-xs text-ink-muted group-hover:text-ink-2">
+                {{ $this->isEntryOnly ? 'requires exit camera' : 'usually a pairing issue · Data Quality' }}
+            </p>
+        </a>
     </div>
 
     <x-panel heading="Recent alert emails">

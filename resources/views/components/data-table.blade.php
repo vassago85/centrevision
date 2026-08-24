@@ -6,7 +6,11 @@
 ])
 
 @if ($isEmpty)
-    <x-placeholder>{{ $empty }}</x-placeholder>
+    {{-- Compact empty state — an empty table next to other content should
+         not eat half the page just to say "no rows". The full-size dashed
+         box is still available via the standalone <x-placeholder> outside
+         a table. --}}
+    <x-placeholder size="compact">{{ $empty }}</x-placeholder>
 @else
     <table data-tf-table {{ $attributes->class('w-full border-collapse text-[13px]') }}>
         @if ($headers)

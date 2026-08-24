@@ -29,10 +29,28 @@ it('summarises the period for an owner', function () {
 
     Livewire::test('pages::reports')
         ->assertSet('rangeKey', '30d')
-        ->assertSee('Total visits')
-        ->assertSee('Daily average')
+        // Primary KPI row uses the commercial labels — "Visits" (not
+        // "Total visits"), "Unique Visitors", "Return Rate".
+        ->assertSee('Visits')
+        ->assertSee('Unique Visitors')
+        ->assertSee('Return Rate')
+        ->assertSee('Daily Average')
         ->assertSee('Visits per day')
         ->assertSee('Daily breakdown');
+});
+
+it('surfaces the secondary metrics without competing with the headline row', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    // Busiest day / peak hour / median dwell / returning visitors / staff
+    // excluded live in a compact row underneath the primary KPI cards. All
+    // still available, none allowed to visually rival Visits above.
+    Livewire::test('pages::reports')
+        ->assertSee('Busiest day')
+        ->assertSee('Peak hour')
+        ->assertSee('Median dwell')
+        ->assertSee('Returning visitors')
+        ->assertSee('Staff / regular excluded');
 });
 
 it('is available to shops, since it is only aggregates', function () {
@@ -43,7 +61,7 @@ it('is available to shops, since it is only aggregates', function () {
 
     Livewire::test('pages::reports')
         ->assertSee('Mall A')
-        ->assertSee('Total visits');
+        ->assertSee('Unique Visitors');
 });
 
 it('counts the busiest day correctly', function () {
@@ -53,7 +71,7 @@ it('counts the busiest day correctly', function () {
 
     Livewire::test('pages::reports')
         ->assertSee($busiest)
-        ->assertSee('2 vehicles');
+        ->assertSee('2 visits');
 });
 
 it('narrows to today when asked, dropping the older visits', function () {
@@ -69,15 +87,15 @@ it('narrows to today when asked, dropping the older visits', function () {
     Livewire::test('pages::reports')
         ->set('rangeKey', 'today')
         ->assertSee('All sites · today')
-        ->assertSeeInOrder(['Total visits', '1']);
+        ->assertSeeInOrder(['Visits', '1']);
 });
 
 it('shows owner reporting sections including security and data quality', function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
     Livewire::test('pages::reports')
-        ->assertSee('Unique vehicles')
-        ->assertSee('Return rate')
+        ->assertSee('Unique Visitors')
+        ->assertSee('Return Rate')
         ->assertSee('Visitor behaviour')
         ->assertSee('Security')
         ->assertSee('Data quality')
@@ -91,7 +109,8 @@ it('hides security and data quality from shop accounts', function () {
     actingAsTenant(User::factory()->shopAdmin($shop)->create());
 
     Livewire::test('pages::reports')
-        ->assertSee('Total visits')
+        ->assertSee('Visits')
+        ->assertSee('Unique Visitors')
         ->assertSee('Visitor behaviour')
         ->assertDontSee('Watchlist hits')
         ->assertDontSee('Visit pairing quality')
@@ -107,7 +126,11 @@ it('hides occupancy until the selected site has parking capacity', function () {
 
     $this->site->update(['settings' => ['parking_capacity' => 200]]);
 
+    // Peak occupancy / Parking pressure live inside the Occupancy section
+    // so they do not visually compete with Visits or Unique Visitors on
+    // the overview. Reach them by switching the section tab.
     Livewire::test('pages::reports')
+        ->set('section', 'occupancy')
         ->assertSee('Peak occupancy')
         ->assertSee('Parking pressure');
 });

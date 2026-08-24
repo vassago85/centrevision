@@ -43,6 +43,30 @@ it('defaults to the threshold configured for the site', function () {
     Livewire::test('pages::security')->assertSet('thresholdHours', 4);
 });
 
+it('renders the four security status cards with the commercial labels', function () {
+    // The row exists in every state; only the copy and severity change
+    // with the underlying counts. Names are stable identifiers a security
+    // operator glances at, so any rename here is a real product change.
+    Livewire::test('pages::security')
+        ->assertSee('Over Dwell')
+        ->assertSee('Odd Hour')
+        ->assertSee('Multi-entry')
+        ->assertSee('Missing Exit')
+        // Old labels should be gone — they hid the fact that missing
+        // exits aren't a security incident by default.
+        ->assertDontSee('Over threshold now')
+        ->assertDontSee('No exit recorded');
+});
+
+it('links the Missing Exit card to the Data Quality section of Reports', function () {
+    // Missing exits are almost always a pairing/camera problem. The
+    // Security card exposes the count but the diagnosis belongs to
+    // Reports → Data quality, so the card is a deep link.
+    Livewire::test('pages::security')
+        ->assertSeeHtml('href="'.route('reports', ['section' => 'quality']).'"')
+        ->assertSee('usually a pairing issue');
+});
+
 it('rejects a threshold that is not on the menu', function () {
     Livewire::withQueryParams(['threshold' => 99])
         ->test('pages::security')

@@ -44,11 +44,11 @@
     <table class="cards">
         <tr>
             <td>
-                <div class="label">Total visits</div>
+                <div class="label">Visits</div>
                 <div class="value">{{ number_format($summary['total']) }}</div>
             </td>
             <td>
-                <div class="label">Unique vehicles</div>
+                <div class="label">Unique visitors</div>
                 <div class="value">{{ number_format($summary['unique']) }}</div>
             </td>
             <td>

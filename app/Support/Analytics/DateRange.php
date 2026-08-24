@@ -20,8 +20,12 @@ class DateRange
     ) {}
 
     /**
-     * Live dashboard windows. Keep this list stable — the operational
-     * dashboard still only offers these four.
+     * Live dashboard windows.
+     *
+     * The Dashboard is deliberately narrow: it answers "what is happening now
+     * and today?". Longer historical windows (30d, 90d, this/last month, …)
+     * belong to Reports via {@see reportOptions()}, so the two surfaces do
+     * not feel like duplicates.
      *
      * @return array<string, string>
      */
@@ -30,8 +34,6 @@ class DateRange
         return [
             'today' => 'Today',
             '7d' => 'Last 7 days',
-            '30d' => 'Last 30 days',
-            '90d' => 'Last 90 days',
         ];
     }
 

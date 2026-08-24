@@ -91,7 +91,11 @@ it('removes a camera and the events it recorded', function () {
         ->and(PlateEvent::withoutGlobalScope(SiteScope::class)->where('camera_id', $camera->id)->count())->toBe(0);
 });
 
-it('reports a camera as unreachable once it goes quiet', function () {
+it('reports a camera as stale once it goes quiet, and healthy while it is talking', function () {
+    // Monitoring health has three buckets: Healthy (reachable), Stale
+    // (active but silent past the window), Offline (inactive or never
+    // seen). Anything more granular belongs in the setup / diagnostics
+    // modals, not the ops table.
     Camera::factory()->for($this->site)->create([
         'name' => 'Silent camera',
         'last_event_at' => now()->subHours(4),
@@ -105,8 +109,44 @@ it('reports a camera as unreachable once it goes quiet', function () {
     ]);
 
     Livewire::test('pages::cameras')
-        ->assertSeeInOrder(['Silent camera', 'Unreachable'])
-        ->assertSeeInOrder(['Live camera', 'Online']);
+        ->assertSeeInOrder(['Silent camera', 'Stale'])
+        ->assertSeeInOrder(['Live camera', 'Healthy']);
+});
+
+it('surfaces the compact fleet summary with online / stale / offline / reads today', function () {
+    Camera::factory()->for($this->site)->create([
+        'name' => 'North',
+        'last_event_at' => now()->subMinute(),
+        'last_probe_ok_at' => now()->subMinute(),
+    ]);
+    Camera::factory()->for($this->site)->create([
+        'name' => 'South',
+        'is_active' => false,
+    ]);
+
+    Livewire::test('pages::cameras')
+        ->assertSee('Online')
+        ->assertSee('Offline')
+        // The old "Stale after N minutes" copy is not a page-level metric
+        // any more — it moved to a tooltip so it stops shouting when no
+        // camera is actually stale.
+        ->assertDontSee('Stale after')
+        ->assertSee('Reads today');
+});
+
+it('renames the operational columns to Reads Today and Last Read', function () {
+    Camera::factory()->for($this->site)->create([
+        'name' => 'North',
+        'last_event_at' => now()->subMinute(),
+    ]);
+
+    Livewire::test('pages::cameras')
+        // Commercial ANPR product wording — reads, not events — everywhere
+        // this page describes ingestion activity.
+        ->assertSee('Reads Today')
+        ->assertSee('Last Read')
+        ->assertDontSee('Events today')
+        ->assertDontSee('Last event');
 });
 
 it('creates a webhook camera without requiring an IP address', function () {

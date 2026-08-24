@@ -5,7 +5,6 @@ use App\Support\Analytics\TrafficAnalytics;
 use App\Support\Reporting\ReportExporter;
 use App\Support\Reporting\TrafficReport;
 use App\Support\Tenancy;
-use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Livewire\Attributes\Computed;
@@ -47,7 +46,7 @@ new #[Title('Reports')] class extends Component {
         return app(ReportExporter::class)->csvDownload($this->report());
     }
 
-    public function exportPdf(): Response
+    public function exportPdf(): StreamedResponse
     {
         return app(ReportExporter::class)->pdfDownload($this->report());
     }

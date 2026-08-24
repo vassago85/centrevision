@@ -4,6 +4,7 @@ namespace App\Support\Reporting;
 
 use App\Support\Analytics\DateRange;
 use App\Support\Analytics\TrafficAnalytics;
+use App\Support\Utf8;
 use Illuminate\Support\Collection;
 
 /**
@@ -14,11 +15,15 @@ use Illuminate\Support\Collection;
  */
 class TrafficReport
 {
+    public readonly string $scope;
+
     public function __construct(
         protected TrafficAnalytics $analytics,
         public readonly DateRange $range,
-        public readonly string $scope,
-    ) {}
+        string $scope,
+    ) {
+        $this->scope = Utf8::clean($scope);
+    }
 
     /**
      * @return array{total: int, daily_average: int, average_dwell: int|null, median_dwell: int|null, repeat_percentage: float|null, peak_hour: string|null}

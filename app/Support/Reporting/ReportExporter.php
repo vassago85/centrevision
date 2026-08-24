@@ -3,7 +3,6 @@
 namespace App\Support\Reporting;
 
 use Barryvdh\DomPDF\Facade\Pdf;
-use Illuminate\Http\Response;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -84,11 +83,15 @@ class ReportExporter
             ->output();
     }
 
-    public function pdfDownload(TrafficReport $report): Response
+    public function pdfDownload(TrafficReport $report): StreamedResponse
     {
-        return response($this->pdf($report), 200, [
-            'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'attachment; filename="'.$report->filename('pdf').'"',
-        ]);
+        // streamDownload matches csvDownload. Returning the raw PDF bytes as
+        // a regular Response makes Livewire JSON-encode the binary and 500
+        // with "Malformed UTF-8 characters".
+        return response()->streamDownload(
+            fn () => print ($this->pdf($report)),
+            $report->filename('pdf'),
+            ['Content-Type' => 'application/pdf'],
+        );
     }
 }

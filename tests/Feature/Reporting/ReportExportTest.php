@@ -72,6 +72,23 @@ it('downloads the report from the reports page', function () {
         ->assertFileDownloaded('mall-a-last-7-days-20260715.csv');
 });
 
+it('downloads the pdf through livewire without json-encoding the bytes', function () {
+    app(Tenancy::class)->setCurrentSiteId($this->site->id);
+
+    Livewire::test('pages::reports')
+        ->set('rangeKey', '7d')
+        ->call('exportPdf')
+        ->assertFileDownloaded('mall-a-last-7-days-20260715.pdf');
+});
+
+it('cleans a non-utf8 site name so the export can be json-wrapped', function () {
+    $dirty = "Mall \x80 A";
+    $report = new TrafficReport(app(TrafficAnalytics::class), DateRange::make('7d'), $dirty);
+
+    expect(mb_check_encoding($report->scope, 'UTF-8'))->toBeTrue()
+        ->and(json_encode(['title' => $report->title()]))->not->toBeFalse();
+});
+
 it('emails a site whose schedule is due today', function () {
     Mail::fake();
     Date::setTestNow('2026-07-20 06:00:00'); // A Monday.

@@ -2,11 +2,15 @@
 
 namespace App\Support\Analytics;
 
+use App\Enums\CameraRole;
 use App\Enums\PlateDirection;
 use App\Enums\PlateTagType;
+use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\PlateTag;
+use App\Models\Site;
 use App\Models\Visit;
+use App\Support\Tenancy;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -27,6 +31,12 @@ use Illuminate\Support\Facades\DB;
 class TrafficAnalytics
 {
     /**
+     * Default audience is shopper traffic. Reports can clone this instance
+     * with forAudience() without changing the live dashboard.
+     */
+    protected string $audience = 'shopper';
+
+    /**
      * Buckets for the dwell distribution chart, in minutes.
      *
      * @var array<int, array{label: string, from: int, to: int|null}>
@@ -39,6 +49,34 @@ class TrafficAnalytics
         ['label' => '1-2h', 'from' => 60, 'to' => 120],
         ['label' => '2h+', 'from' => 120, 'to' => null],
     ];
+
+    /**
+     * @var array<int, array{label: string, from: int, to: int|null}>
+     */
+    public const FREQUENCY_BUCKETS = [
+        ['label' => '1 visit', 'from' => 1, 'to' => 1],
+        ['label' => '2–3 visits', 'from' => 2, 'to' => 3],
+        ['label' => '4–5 visits', 'from' => 4, 'to' => 5],
+        ['label' => '6–10 visits', 'from' => 6, 'to' => 10],
+        ['label' => '10+ visits', 'from' => 11, 'to' => null],
+    ];
+
+    /** @var list<string> */
+    public const WEEKDAY_LABELS = [
+        'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+    ];
+
+    /**
+     * Reports-only: shopper (default), staff, or all vehicles. Cloning keeps
+     * the container singleton used by the dashboard on the shopper path.
+     */
+    public function forAudience(string $audience): static
+    {
+        $clone = clone $this;
+        $clone->audience = in_array($audience, ['staff', 'all'], true) ? $audience : 'shopper';
+
+        return $clone;
+    }
 
     public function totalVisits(DateRange $range): int
     {
@@ -184,9 +222,9 @@ class TrafficAnalytics
      * Open visits as a percent of the site's declared parking capacity.
      * Null when capacity is unset or the tenant spans multiple sites.
      */
-    public function occupancyPercent(?\App\Models\Site $site = null): ?float
+    public function occupancyPercent(?Site $site = null): ?float
     {
-        $site ??= app(\App\Support\Tenancy::class)->currentSite();
+        $site ??= app(Tenancy::class)->currentSite();
 
         if ($site === null) {
             return null;
@@ -210,8 +248,8 @@ class TrafficAnalytics
      */
     public function hasExitTracking(): bool
     {
-        return $this->hasExitTracking ??= \App\Models\Camera::query()
-            ->whereIn('role', [\App\Enums\CameraRole::Exit->value, \App\Enums\CameraRole::Both->value])
+        return $this->hasExitTracking ??= Camera::query()
+            ->whereIn('role', [CameraRole::Exit->value, CameraRole::Both->value])
             ->exists();
     }
 
@@ -486,6 +524,305 @@ class TrafficAnalytics
     }
 
     /**
+     * Visits in the window that belong to staff/regular plates. Shown on
+     * Reports as "how much staff traffic was excluded" — always counted
+     * against the recurring tag, never against the current audience.
+     */
+    public function excludedVisitCount(DateRange $range): int
+    {
+        return Visit::query()
+            ->onlyRecurring()
+            ->enteredBetween($range->from, $range->to)
+            ->count();
+    }
+
+    /**
+     * Unique plates in the window that also visited this site before it.
+     */
+    public function returningVehicles(DateRange $range): int
+    {
+        $platesInPeriod = $this->baseQuery($range)->select('visits.plate_number')->distinct();
+
+        return $this->identityQuery()
+            ->where('entered_at', '<', $range->from)
+            ->whereIn('plate_number', $platesInPeriod)
+            ->distinct('plate_number')
+            ->count('plate_number');
+    }
+
+    public function firstTimeVehicles(DateRange $range): int
+    {
+        return max(0, $this->uniqueVehicles($range) - $this->returningVehicles($range));
+    }
+
+    /**
+     * Share of unique vehicles in the window that had visited before it.
+     */
+    public function returningVehicleRate(DateRange $range): ?float
+    {
+        $unique = $this->uniqueVehicles($range);
+
+        if ($unique === 0) {
+            return null;
+        }
+
+        return round($this->returningVehicles($range) / $unique * 100, 1);
+    }
+
+    /**
+     * Of unique vehicles in the window, how many also visited in the 30 days
+     * immediately before it. Null when the window itself is empty.
+     */
+    public function returnRate30Day(DateRange $range): ?float
+    {
+        $unique = $this->uniqueVehicles($range);
+
+        if ($unique === 0) {
+            return null;
+        }
+
+        $lookback = new DateRange(
+            'lookback_30',
+            'Prior 30 days',
+            $range->from->copy()->subDays(30),
+            $range->from->copy()->subSecond(),
+        );
+
+        $priorPlates = $this->baseQuery($lookback)->select('visits.plate_number')->distinct();
+
+        $returned = $this->baseQuery($range)
+            ->whereIn('plate_number', $priorPlates)
+            ->distinct('plate_number')
+            ->count('plate_number');
+
+        return round($returned / $unique * 100, 1);
+    }
+
+    /**
+     * @return Collection<int, array{label: string, count: int, percent: float}>
+     */
+    public function visitFrequency(DateRange $range): Collection
+    {
+        $query = DB::query()->fromSub(
+            $this->baseQuery($range)
+                ->select('plate_number')
+                ->selectRaw('count(*) as trips')
+                ->groupBy('plate_number')
+                ->toBase(),
+            'freq',
+        );
+
+        foreach (self::FREQUENCY_BUCKETS as $index => $bucket) {
+            $query->selectRaw(
+                'count(*) filter (where trips >= ?'.($bucket['to'] === null ? '' : ' and trips <= ?').") as bucket_{$index}",
+                $bucket['to'] === null ? [$bucket['from']] : [$bucket['from'], $bucket['to']],
+            );
+        }
+
+        $row = $query->first();
+        $total = collect(self::FREQUENCY_BUCKETS)->keys()->sum(fn (int $i) => (int) ($row->{"bucket_{$i}"} ?? 0));
+
+        return collect(self::FREQUENCY_BUCKETS)->map(fn (array $bucket, int $index) => [
+            'label' => $bucket['label'],
+            'count' => $count = (int) ($row->{"bucket_{$index}"} ?? 0),
+            'percent' => $total > 0 ? round($count / $total * 100, 1) : 0.0,
+        ]);
+    }
+
+    /**
+     * Average visits per weekday, Monday first, so a month with five
+     * Saturdays does not make Saturday look busier than it is.
+     *
+     * @return Collection<int, array{label: string, count: int}>
+     */
+    public function visitsByWeekday(DateRange $range): Collection
+    {
+        $rows = $this->baseQuery($range)
+            ->selectRaw('extract(isodow from entered_at)::int as weekday')
+            ->selectRaw('count(*) as total')
+            ->selectRaw('count(distinct entered_at::date) as days')
+            ->groupBy('weekday')
+            ->toBase()
+            ->get()
+            ->keyBy('weekday');
+
+        return collect(range(1, 7))->map(function (int $dow) use ($rows) {
+            $row = $rows->get($dow);
+
+            return [
+                'label' => self::WEEKDAY_LABELS[$dow - 1],
+                'count' => $row === null ? 0 : (int) round($row->total / max(1, (int) $row->days)),
+            ];
+        });
+    }
+
+    /**
+     * Day × hour grid of average visits. Rows are Monday–Sunday; cells are
+     * the mean for that weekday/hour across the window.
+     *
+     * @return Collection<int, array{weekday: int, label: string, hours: array<int, array{hour: int, average: float}>}>
+     */
+    public function dayHourHeatmap(DateRange $range): Collection
+    {
+        $rows = $this->baseQuery($range)
+            ->selectRaw('extract(isodow from entered_at)::int as weekday')
+            ->selectRaw('extract(hour from entered_at)::int as hour')
+            ->selectRaw('count(*) as total')
+            ->selectRaw('count(distinct entered_at::date) as days')
+            ->groupBy('weekday', 'hour')
+            ->toBase()
+            ->get()
+            ->keyBy(fn (object $row) => $row->weekday.'-'.$row->hour);
+
+        return collect(range(1, 7))->map(function (int $dow) use ($rows) {
+            $hours = collect(range(0, 23))->map(function (int $hour) use ($rows, $dow) {
+                $row = $rows->get($dow.'-'.$hour);
+
+                return [
+                    'hour' => $hour,
+                    'average' => $row === null
+                        ? 0.0
+                        : round((float) $row->total / max(1, (int) $row->days), 1),
+                ];
+            });
+
+            return [
+                'weekday' => $dow,
+                'label' => self::WEEKDAY_LABELS[$dow - 1],
+                'hours' => $hours->all(),
+            ];
+        });
+    }
+
+    /**
+     * Historical series for the Reports "visits over time" chart. Grain
+     * follows the window; metric is visits, unique vehicles, or exits.
+     *
+     * @return Collection<int, array{date: string, label: string, count: int}>
+     */
+    public function seriesOverTime(DateRange $range, string $metric = 'visits'): Collection
+    {
+        return match ($range->grain()) {
+            'hour' => $this->seriesByHour($range, $metric),
+            'week' => $this->seriesByWeek($range, $metric),
+            default => $this->seriesByDay($range, $metric),
+        };
+    }
+
+    /**
+     * @return Collection<int, array{date: string, label: string, count: int}>
+     */
+    protected function seriesByHour(DateRange $range, string $metric): Collection
+    {
+        $counts = $this->metricQuery($range, $metric)
+            ->selectRaw("to_char(date_trunc('hour', {$this->metricTimestamp($metric)}), 'YYYY-MM-DD HH24:00:00') as bucket, {$this->metricSelect($metric)} as total")
+            ->groupBy('bucket')
+            ->pluck('total', 'bucket');
+
+        $hours = collect();
+
+        for ($cursor = $range->from->copy()->startOfHour(); $cursor->lte($range->to); $cursor = $cursor->addHour()) {
+            $key = $cursor->format('Y-m-d H:00:00');
+
+            $hours->push([
+                'date' => $cursor->toDateTimeString(),
+                'label' => $cursor->format('H:i'),
+                'count' => (int) ($counts[$key] ?? 0),
+            ]);
+        }
+
+        return $hours;
+    }
+
+    /**
+     * @return Collection<int, array{date: string, label: string, count: int}>
+     */
+    protected function seriesByDay(DateRange $range, string $metric): Collection
+    {
+        $counts = $this->metricQuery($range, $metric)
+            ->selectRaw("{$this->metricTimestamp($metric)}::date as day, {$this->metricSelect($metric)} as total")
+            ->groupBy('day')
+            ->pluck('total', 'day');
+
+        $days = collect();
+
+        for ($cursor = $range->from->copy(); $cursor->lte($range->to); $cursor = $cursor->addDay()) {
+            $key = $cursor->toDateString();
+
+            $days->push([
+                'date' => $key,
+                'label' => $cursor->format('j M'),
+                'count' => (int) ($counts[$key] ?? 0),
+            ]);
+        }
+
+        return $days;
+    }
+
+    /**
+     * @return Collection<int, array{date: string, label: string, count: int}>
+     */
+    protected function seriesByWeek(DateRange $range, string $metric): Collection
+    {
+        $counts = $this->metricQuery($range, $metric)
+            ->selectRaw("date_trunc('week', {$this->metricTimestamp($metric)})::date as week, {$this->metricSelect($metric)} as total")
+            ->groupBy('week')
+            ->pluck('total', 'week');
+
+        $weeks = collect();
+
+        for ($cursor = $range->from->copy()->startOfWeek(); $cursor->lte($range->to); $cursor = $cursor->addWeek()) {
+            $key = $cursor->toDateString();
+
+            $weeks->push([
+                'date' => $key,
+                'label' => $cursor->format('j M'),
+                'count' => (int) ($counts[$key] ?? 0),
+            ]);
+        }
+
+        return $weeks;
+    }
+
+    /**
+     * @return Builder<Visit>
+     */
+    protected function metricQuery(DateRange $range, string $metric): Builder
+    {
+        if ($metric === 'exits') {
+            return $this->identityQuery()
+                ->closed()
+                ->whereBetween('exited_at', [$range->from, $range->to]);
+        }
+
+        return $this->baseQuery($range);
+    }
+
+    protected function metricTimestamp(string $metric): string
+    {
+        return $metric === 'exits' ? 'exited_at' : 'entered_at';
+    }
+
+    protected function metricSelect(string $metric): string
+    {
+        return $metric === 'unique' ? 'count(distinct plate_number)' : 'count(*)';
+    }
+
+    /**
+     * @return Builder<Visit>
+     */
+    protected function identityQuery(): Builder
+    {
+        $query = Visit::query();
+
+        return match ($this->audience) {
+            'staff' => $query->onlyRecurring(),
+            'all' => $query,
+            default => $query->excludingRecurring(),
+        };
+    }
+
+    /**
      * @return Builder<Visit>
      */
     protected function baseQuery(DateRange $range): Builder
@@ -499,8 +836,7 @@ class TrafficAnalytics
         // Dwell-based queries call ->closed() on top of this, which already
         // excludes Orphaned rows where excluding them is correct, so we can
         // safely leave them in the base set.
-        return Visit::query()
-            ->excludingRecurring()
+        return $this->identityQuery()
             ->enteredBetween($range->from, $range->to);
     }
 }

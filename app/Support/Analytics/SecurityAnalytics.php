@@ -2,12 +2,16 @@
 
 namespace App\Support\Analytics;
 
+use App\Enums\AlertRule;
 use App\Enums\CameraRole;
 use App\Enums\PlateDirection;
 use App\Enums\VisitStatus;
+use App\Models\AlertEvent;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Visit;
+use App\Support\Tenancy;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
 
@@ -181,5 +185,96 @@ class SecurityAnalytics
             ->whereIn('site_id', $this->sitesWithExitTracking())
             ->when($cameraId, fn ($q, $id) => $q->whereHas('entryEvent', fn ($ev) => $ev->where('camera_id', $id)))
             ->count();
+    }
+
+    /**
+     * Aggregate security counts for a reporting window. No plates — this is
+     * what the Reports page shows to owners and operators.
+     *
+     * @return array{
+     *   watchlist_hits: int,
+     *   long_dwell: int,
+     *   odd_hour: int,
+     *   multi_entry: int,
+     *   orphaned: int,
+     *   cameras_offline: int
+     * }
+     */
+    public function reportSummary(DateRange $range): array
+    {
+        $alerts = $this->alertQuery($range)
+            ->selectRaw('rule, count(*) as total')
+            ->groupBy('rule')
+            ->pluck('total', 'rule');
+
+        return [
+            'watchlist_hits' => (int) ($alerts[AlertRule::WatchlistHit->value] ?? 0),
+            'long_dwell' => (int) ($alerts[AlertRule::Dwell->value] ?? 0),
+            'odd_hour' => (int) ($alerts[AlertRule::OddHour->value] ?? 0),
+            'multi_entry' => (int) ($alerts[AlertRule::MultiEntry->value] ?? 0),
+            'orphaned' => Visit::query()
+                ->where('status', VisitStatus::Orphaned)
+                ->enteredBetween($range->from, $range->to)
+                ->whereIn('site_id', $this->sitesWithExitTracking())
+                ->count(),
+            'cameras_offline' => Camera::query()
+                ->where('is_active', true)
+                ->get()
+                ->filter(fn (Camera $camera) => ! $camera->isReachable())
+                ->count(),
+        ];
+    }
+
+    /**
+     * @return Collection<int, array{label: string, count: int}>
+     */
+    public function incidentsByType(DateRange $range): Collection
+    {
+        $counts = $this->alertQuery($range)
+            ->selectRaw('rule, count(*) as total')
+            ->groupBy('rule')
+            ->pluck('total', 'rule');
+
+        return collect(AlertRule::cases())->map(fn (AlertRule $rule) => [
+            'label' => $rule->label(),
+            'count' => (int) ($counts[$rule->value] ?? 0),
+        ]);
+    }
+
+    /**
+     * @return Collection<int, array{date: string, label: string, count: int}>
+     */
+    public function incidentsByDay(DateRange $range): Collection
+    {
+        $counts = $this->alertQuery($range)
+            ->selectRaw('detected_at::date as day, count(*) as total')
+            ->groupBy('day')
+            ->pluck('total', 'day');
+
+        $days = collect();
+
+        for ($cursor = $range->from->copy(); $cursor->lte($range->to); $cursor = $cursor->addDay()) {
+            $key = $cursor->toDateString();
+
+            $days->push([
+                'date' => $key,
+                'label' => $cursor->format('j M'),
+                'count' => (int) ($counts[$key] ?? 0),
+            ]);
+        }
+
+        return $days;
+    }
+
+    /**
+     * @return Builder<AlertEvent>
+     */
+    protected function alertQuery(DateRange $range): Builder
+    {
+        $siteIds = app(Tenancy::class)->scopeSiteIds();
+
+        return AlertEvent::query()
+            ->whereIn('site_id', $siteIds === [] ? [0] : $siteIds)
+            ->whereBetween('detected_at', [$range->from, $range->to]);
     }
 }

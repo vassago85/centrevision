@@ -1,8 +1,11 @@
 <?php
 
+use App\Enums\PlateDirection;
 use App\Enums\PlateTagType;
 use App\Enums\VisitStatus;
+use App\Models\Camera;
 use App\Models\Organization;
+use App\Models\PlateEvent;
 use App\Models\PlateTag;
 use App\Models\Site;
 use App\Models\User;
@@ -234,26 +237,26 @@ it('counts hourly arrivals for one specific day', function () {
 });
 
 it('lists the last plate detections, entries and exits, showing a re-entry as its own row', function () {
-    $entrance = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
-    $exitCamera = \App\Models\Camera::factory()->for($this->site)->exit()->create();
+    $entrance = Camera::factory()->for($this->site)->entrance()->create();
+    $exitCamera = Camera::factory()->for($this->site)->exit()->create();
 
     // Same plate seen entering twice, hours apart — the caller needs both
     // rows, not the visits-deduplicated view.
-    $first = \App\Models\PlateEvent::factory()->for($entrance)->create([
+    $first = PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'FF98ZTGP',
-        'direction' => \App\Enums\PlateDirection::In,
+        'direction' => PlateDirection::In,
         'captured_at' => Date::now()->subHours(3),
     ]);
-    $second = \App\Models\PlateEvent::factory()->for($entrance)->create([
+    $second = PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'FF98ZTGP',
-        'direction' => \App\Enums\PlateDirection::In,
+        'direction' => PlateDirection::In,
         'captured_at' => Date::now()->subMinutes(20),
     ]);
 
     // Exits belong in Latest activity too — every detection is a row.
-    $exit = \App\Models\PlateEvent::factory()->for($exitCamera)->create([
+    $exit = PlateEvent::factory()->for($exitCamera)->create([
         'plate_number' => 'GONE001',
-        'direction' => \App\Enums\PlateDirection::Out,
+        'direction' => PlateDirection::Out,
         'captured_at' => Date::now()->subMinutes(5),
     ]);
 
@@ -271,9 +274,9 @@ it('lists the last plate detections, entries and exits, showing a re-entry as it
 
     expect($entries)->toHaveCount(3)
         ->and($entries[0]->id)->toBe($exit->id)
-        ->and($entries[0]->direction)->toBe(\App\Enums\PlateDirection::Out)
+        ->and($entries[0]->direction)->toBe(PlateDirection::Out)
         ->and($entries[1]->id)->toBe($second->id)
-        ->and($entries[1]->direction)->toBe(\App\Enums\PlateDirection::In)
+        ->and($entries[1]->direction)->toBe(PlateDirection::In)
         ->and($entries[1]->getAttribute('on_site_now'))->toBeTrue()
         ->and($entries[2]->id)->toBe($first->id)
         // FF98ZTGP has an open visit today, so both of its rows are flagged
@@ -282,16 +285,16 @@ it('lists the last plate detections, entries and exits, showing a re-entry as it
 });
 
 it('keeps the deprecated recentEntries() returning entries only', function () {
-    $entrance = \App\Models\Camera::factory()->for($this->site)->entrance()->create();
+    $entrance = Camera::factory()->for($this->site)->entrance()->create();
 
-    \App\Models\PlateEvent::factory()->for($entrance)->create([
+    PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'ENTRY01',
-        'direction' => \App\Enums\PlateDirection::In,
+        'direction' => PlateDirection::In,
         'captured_at' => Date::now()->subMinutes(30),
     ]);
-    \App\Models\PlateEvent::factory()->for($entrance)->create([
+    PlateEvent::factory()->for($entrance)->create([
         'plate_number' => 'EXIT001',
-        'direction' => \App\Enums\PlateDirection::Out,
+        'direction' => PlateDirection::Out,
         'captured_at' => Date::now()->subMinutes(5),
     ]);
 
@@ -336,4 +339,112 @@ it('counts currently on-site vehicles across every accessible site', function ()
     ]);
 
     expect($this->analytics->currentlyOnSite())->toBe(1);
+});
+
+it('can switch to staff-only or all-vehicle audiences without changing the default', function () {
+    visitAt($this->site, 'SHOPPER1', 2);
+    visitAt($this->site, 'STAFF001', 2);
+
+    PlateTag::create([
+        'site_id' => $this->site->id,
+        'plate_number' => 'STAFF001',
+        'tag' => PlateTagType::RecurringPattern,
+        'tagged_at' => now(),
+    ]);
+
+    expect($this->analytics->totalVisits($this->range))->toBe(1)
+        ->and($this->analytics->forAudience('staff')->totalVisits($this->range))->toBe(1)
+        ->and($this->analytics->forAudience('all')->totalVisits($this->range))->toBe(2)
+        ->and($this->analytics->totalVisits($this->range))->toBe(1);
+});
+
+it('counts staff visits that shopper analytics left out', function () {
+    visitAt($this->site, 'SHOPPER1', 2);
+    visitAt($this->site, 'STAFF001', 2);
+    visitAt($this->site, 'STAFF001', 4);
+
+    PlateTag::create([
+        'site_id' => $this->site->id,
+        'plate_number' => 'STAFF001',
+        'tag' => PlateTagType::RecurringPattern,
+        'tagged_at' => now(),
+    ]);
+
+    expect($this->analytics->excludedVisitCount($this->range))->toBe(2);
+});
+
+it('counts returning vehicles as plates that also visited before the window', function () {
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'RETURN01',
+        'entered_at' => Date::now()->subDays(20),
+        'exited_at' => Date::now()->subDays(20)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    visitAt($this->site, 'RETURN01', 2);
+    visitAt($this->site, 'FIRST001', 3);
+
+    expect($this->analytics->uniqueVehicles($this->range))->toBe(2)
+        ->and($this->analytics->returningVehicles($this->range))->toBe(1)
+        ->and($this->analytics->firstTimeVehicles($this->range))->toBe(1)
+        ->and($this->analytics->returningVehicleRate($this->range))->toBe(50.0);
+});
+
+it('buckets visit frequency by unique vehicle', function () {
+    visitAt($this->site, 'ONCE0001', 2);
+    visitAt($this->site, 'TWICE001', 2);
+    visitAt($this->site, 'TWICE001', 26);
+    visitAt($this->site, 'OFTEN001', 2);
+    visitAt($this->site, 'OFTEN001', 10);
+    visitAt($this->site, 'OFTEN001', 20);
+    visitAt($this->site, 'OFTEN001', 30);
+    visitAt($this->site, 'OFTEN001', 40);
+
+    $buckets = $this->analytics->visitFrequency($this->range)->keyBy('label');
+
+    expect($buckets['1 visit']['count'])->toBe(1)
+        ->and($buckets['2–3 visits']['count'])->toBe(1)
+        ->and($buckets['4–5 visits']['count'])->toBe(1);
+});
+
+it('builds a day-by-hour heatmap of average visits', function () {
+    $monday = Date::now()->startOfWeek()->setTime(10, 0);
+
+    Visit::factory()->for($this->site)->create([
+        'entered_at' => $monday,
+        'exited_at' => $monday->copy()->addMinutes(20),
+        'dwell_minutes' => 20,
+        'status' => VisitStatus::Closed,
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'entered_at' => $monday->copy()->addWeek(),
+        'exited_at' => $monday->copy()->addWeek()->addMinutes(20),
+        'dwell_minutes' => 20,
+        'status' => VisitStatus::Closed,
+    ]);
+
+    $heatmap = $this->analytics->dayHourHeatmap(DateRange::make('30d'));
+
+    expect($heatmap)->toHaveCount(7)
+        ->and($heatmap[0]['label'])->toBe('Monday')
+        ->and($heatmap[0]['hours'][10]['average'])->toBe(1.0);
+});
+
+it('averages weekday visits in Monday-first order', function () {
+    $monday = Date::now()->startOfWeek()->setTime(12, 0);
+
+    foreach ([$monday, $monday->copy()->addWeek()] as $day) {
+        Visit::factory()->for($this->site)->create([
+            'entered_at' => $day,
+            'exited_at' => $day->copy()->addMinutes(30),
+            'dwell_minutes' => 30,
+            'status' => VisitStatus::Closed,
+        ]);
+    }
+
+    $days = $this->analytics->visitsByWeekday(DateRange::make('30d'));
+
+    expect($days->pluck('label')->all())->toBe([
+        'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+    ])->and($days[0]['count'])->toBe(1);
 });

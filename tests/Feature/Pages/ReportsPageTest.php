@@ -6,6 +6,7 @@ use App\Models\ShopSubscription;
 use App\Models\Site;
 use App\Models\User;
 use App\Models\Visit;
+use App\Support\Tenancy;
 use Illuminate\Support\Facades\Date;
 use Livewire\Livewire;
 
@@ -69,4 +70,44 @@ it('narrows to today when asked, dropping the older visits', function () {
         ->set('rangeKey', 'today')
         ->assertSee('All sites · today')
         ->assertSeeInOrder(['Total visits', '1']);
+});
+
+it('shows owner reporting sections including security and data quality', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::test('pages::reports')
+        ->assertSee('Unique vehicles')
+        ->assertSee('Return rate')
+        ->assertSee('Visitor behaviour')
+        ->assertSee('Security')
+        ->assertSee('Data quality')
+        ->assertSee('Visit pairing quality');
+});
+
+it('hides security and data quality from shop accounts', function () {
+    $shop = Organization::factory()->shop($this->site)->create();
+    ShopSubscription::factory()->for($shop, 'organization')->create();
+
+    actingAsTenant(User::factory()->shopAdmin($shop)->create());
+
+    Livewire::test('pages::reports')
+        ->assertSee('Total visits')
+        ->assertSee('Visitor behaviour')
+        ->assertDontSee('Watchlist hits')
+        ->assertDontSee('Visit pairing quality')
+        ->assertDontSee('Data quality');
+});
+
+it('hides occupancy until the selected site has parking capacity', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+    app(Tenancy::class)->setCurrentSiteId($this->site->id);
+
+    Livewire::test('pages::reports')
+        ->assertDontSee('Parking pressure');
+
+    $this->site->update(['settings' => ['parking_capacity' => 200]]);
+
+    Livewire::test('pages::reports')
+        ->assertSee('Peak occupancy')
+        ->assertSee('Parking pressure');
 });

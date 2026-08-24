@@ -21,12 +21,27 @@ class TrafficReport
         protected TrafficAnalytics $analytics,
         public readonly DateRange $range,
         string $scope,
+        public readonly ?DateRange $comparison = null,
+        public readonly bool $includeOps = false,
+        public readonly ?array $occupancy = null,
     ) {
         $this->scope = Utf8::clean($scope);
     }
 
     /**
-     * @return array{total: int, daily_average: int, average_dwell: int|null, median_dwell: int|null, repeat_percentage: float|null, peak_hour: string|null}
+     * @return array{
+     *   total: int,
+     *   daily_average: int,
+     *   average_dwell: int|null,
+     *   median_dwell: int|null,
+     *   repeat_percentage: float|null,
+     *   peak_hour: string|null,
+     *   unique: int,
+     *   returning: int,
+     *   return_rate: float|null,
+     *   return_rate_30d: float|null,
+     *   excluded: int
+     * }
      */
     public function summary(): array
     {
@@ -41,7 +56,28 @@ class TrafficReport
             'median_dwell' => $dwell['median'],
             'repeat_percentage' => $this->analytics->repeatVisitorPercentage($this->range),
             'peak_hour' => $peak['label'] ?? null,
+            'unique' => $this->analytics->uniqueVehicles($this->range),
+            'returning' => $this->analytics->returningVehicles($this->range),
+            'return_rate' => $this->analytics->returningVehicleRate($this->range),
+            'return_rate_30d' => $this->analytics->returnRate30Day($this->range),
+            'excluded' => $this->analytics->excludedVisitCount($this->range),
         ];
+    }
+
+    /**
+     * @return Collection<int, array{label: string, count: int}>
+     */
+    public function weekday(): Collection
+    {
+        return once(fn () => $this->analytics->visitsByWeekday($this->range));
+    }
+
+    /**
+     * @return Collection<int, array{label: string, count: int, percent: float}>
+     */
+    public function visitFrequency(): Collection
+    {
+        return once(fn () => $this->analytics->visitFrequency($this->range));
     }
 
     /**

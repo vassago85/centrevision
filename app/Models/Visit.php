@@ -120,6 +120,24 @@ class Visit extends Model implements SiteScoped
     }
 
     /**
+     * The inverse of excludingRecurring — staff and tenant-pattern plates
+     * only. Used by the Reports "Staff / regular" audience filter.
+     *
+     * @param  Builder<Visit>  $query
+     * @return Builder<Visit>
+     */
+    public function scopeOnlyRecurring(Builder $query): Builder
+    {
+        return $query->whereExists(function ($sub) {
+            $sub->selectRaw('1')
+                ->from('plate_tags')
+                ->whereColumn('plate_tags.site_id', 'visits.site_id')
+                ->whereColumn('plate_tags.plate_number', 'visits.plate_number')
+                ->where('plate_tags.tag', PlateTagType::RecurringPattern->value);
+        });
+    }
+
+    /**
      * @param  Builder<Visit>  $query
      * @return Builder<Visit>
      */

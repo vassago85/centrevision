@@ -33,8 +33,12 @@
     <h1>{{ $report->scope }}</h1>
     <p class="muted">
         {{ $report->range->label }} ·
-        {{ $report->range->from->format('j M Y') }} – {{ $report->range->to->format('j M Y') }} ·
-        generated {{ now()->format('j M Y H:i') }}
+        {{ $report->range->from->format('j M Y') }} – {{ $report->range->to->format('j M Y') }}
+        @if ($report->comparison)
+            · vs {{ strtolower($report->comparison->label) }}
+            ({{ $report->comparison->from->format('j M Y') }} – {{ $report->comparison->to->format('j M Y') }})
+        @endif
+        · generated {{ now()->format('j M Y H:i') }}
     </p>
 
     <table class="cards">
@@ -44,16 +48,34 @@
                 <div class="value">{{ number_format($summary['total']) }}</div>
             </td>
             <td>
+                <div class="label">Unique vehicles</div>
+                <div class="value">{{ number_format($summary['unique']) }}</div>
+            </td>
+            <td>
+                <div class="label">Return rate</div>
+                <div class="value">{{ $summary['return_rate'] === null ? '—' : $summary['return_rate'].'%' }}</div>
+            </td>
+            <td>
                 <div class="label">Daily average</div>
                 <div class="value">{{ number_format($summary['daily_average']) }}</div>
             </td>
+        </tr>
+        <tr>
             <td>
                 <div class="label">Average dwell</div>
                 <div class="value">{{ $summary['average_dwell'] === null ? '—' : $summary['average_dwell'].' min' }}</div>
             </td>
             <td>
+                <div class="label">Median dwell</div>
+                <div class="value">{{ $summary['median_dwell'] === null ? '—' : $summary['median_dwell'].' min' }}</div>
+            </td>
+            <td>
                 <div class="label">Peak hour</div>
                 <div class="value">{{ $summary['peak_hour'] ?? '—' }}</div>
+            </td>
+            <td>
+                <div class="label">Staff visits excluded</div>
+                <div class="value">{{ number_format($summary['excluded']) }}</div>
             </td>
         </tr>
     </table>
@@ -88,6 +110,68 @@
             @endforeach
         </tbody>
     </table>
+
+    <h2>Visitor behaviour</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Frequency</th>
+                <th class="num">Vehicles</th>
+                <th class="num">Share</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach ($report->visitFrequency() as $bucket)
+                <tr>
+                    <td>{{ $bucket['label'] }}</td>
+                    <td class="num">{{ number_format($bucket['count']) }}</td>
+                    <td class="num">{{ $bucket['percent'] }}%</td>
+                </tr>
+            @endforeach
+        </tbody>
+    </table>
+
+    <h2>Visits by weekday</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th class="num">Average visits</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach ($report->weekday() as $day)
+                <tr>
+                    <td>{{ $day['label'] }}</td>
+                    <td class="num">{{ number_format($day['count']) }}</td>
+                </tr>
+            @endforeach
+        </tbody>
+    </table>
+
+    @if ($report->occupancy)
+        <h2>Occupancy</h2>
+        <table class="cards">
+            <tr>
+                <td>
+                    <div class="label">Peak occupancy</div>
+                    <div class="value">{{ number_format($report->occupancy['peak']) }}</div>
+                </td>
+                <td>
+                    <div class="label">Average occupancy</div>
+                    <div class="value">{{ number_format($report->occupancy['average'], 1) }}</div>
+                </td>
+                <td>
+                    <div class="label">Parking pressure</div>
+                    <div class="value">{{ $report->occupancy['parking_pressure'] }} above 80%</div>
+                </td>
+                <td>
+                    <div class="label">Above 90%</div>
+                    <div class="value">{{ \App\Support\Analytics\OccupancyAnalytics::formatDuration($report->occupancy['minutes_above_90']) }}</div>
+                </td>
+            </tr>
+        </table>
+    @endif
 
     <h2>Visits per day</h2>
     <table>

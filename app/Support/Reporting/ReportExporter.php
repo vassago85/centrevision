@@ -2,6 +2,8 @@
 
 namespace App\Support\Reporting;
 
+use App\Support\Analytics\DataQualityAnalytics;
+use App\Support\Analytics\SecurityAnalytics;
 use Barryvdh\DomPDF\Facade\Pdf;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -39,11 +41,23 @@ class ReportExporter
 
         fputcsv($handle, ['Summary']);
         fputcsv($handle, ['Total visits', $summary['total']]);
+        fputcsv($handle, ['Unique vehicles', $summary['unique']]);
+        fputcsv($handle, ['Returning vehicles', $summary['returning']]);
+        fputcsv($handle, ['Return rate (%)', $summary['return_rate'] ?? '']);
+        fputcsv($handle, ['30-day return rate (%)', $summary['return_rate_30d'] ?? '']);
         fputcsv($handle, ['Daily average', $summary['daily_average']]);
         fputcsv($handle, ['Average dwell (minutes)', $summary['average_dwell'] ?? '']);
         fputcsv($handle, ['Median dwell (minutes)', $summary['median_dwell'] ?? '']);
         fputcsv($handle, ['Repeat visitors (%)', $summary['repeat_percentage'] ?? '']);
         fputcsv($handle, ['Peak hour', $summary['peak_hour'] ?? '']);
+        fputcsv($handle, ['Staff / regular visits excluded', $summary['excluded']]);
+
+        if ($report->comparison !== null) {
+            fputcsv($handle, ['Comparison period', $report->comparison->label]);
+            fputcsv($handle, ['Comparison from', $report->comparison->from->toDateString()]);
+            fputcsv($handle, ['Comparison to', $report->comparison->to->toDateString()]);
+        }
+
         fputcsv($handle, []);
 
         fputcsv($handle, ['Visits per day']);
@@ -67,6 +81,53 @@ class ReportExporter
 
         foreach ($report->dwellDistribution() as $bucket) {
             fputcsv($handle, [$bucket['label'], $bucket['count'], $bucket['percent']]);
+        }
+
+        fputcsv($handle, []);
+        fputcsv($handle, ['Visits by weekday']);
+        fputcsv($handle, ['Weekday', 'Average visits']);
+
+        foreach ($report->weekday() as $day) {
+            fputcsv($handle, [$day['label'], $day['count']]);
+        }
+
+        fputcsv($handle, []);
+        fputcsv($handle, ['Visit frequency']);
+        fputcsv($handle, ['Bucket', 'Vehicles', 'Share (%)']);
+
+        foreach ($report->visitFrequency() as $bucket) {
+            fputcsv($handle, [$bucket['label'], $bucket['count'], $bucket['percent']]);
+        }
+
+        if ($report->occupancy !== null) {
+            fputcsv($handle, []);
+            fputcsv($handle, ['Occupancy']);
+            fputcsv($handle, ['Peak occupancy', $report->occupancy['peak']]);
+            fputcsv($handle, ['Average occupancy', $report->occupancy['average']]);
+            fputcsv($handle, ['Parking pressure', $report->occupancy['parking_pressure']]);
+            fputcsv($handle, ['Minutes above 80%', $report->occupancy['minutes_above_80']]);
+            fputcsv($handle, ['Minutes above 90%', $report->occupancy['minutes_above_90']]);
+        }
+
+        if ($report->includeOps) {
+            $quality = app(DataQualityAnalytics::class)->summary($report->range);
+            $security = app(SecurityAnalytics::class)->reportSummary($report->range);
+
+            fputcsv($handle, []);
+            fputcsv($handle, ['Security summary']);
+            fputcsv($handle, ['Watchlist hits', $security['watchlist_hits']]);
+            fputcsv($handle, ['Long-dwell alerts', $security['long_dwell']]);
+            fputcsv($handle, ['Odd-hour activity', $security['odd_hour']]);
+            fputcsv($handle, ['Multiple-entry vehicles', $security['multi_entry']]);
+            fputcsv($handle, ['Missed exits', $security['orphaned']]);
+
+            fputcsv($handle, []);
+            fputcsv($handle, ['Camera quality']);
+            fputcsv($handle, ['Plate reads', $quality['reads']]);
+            fputcsv($handle, ['Paired visits', $quality['paired_visits']]);
+            fputcsv($handle, ['Pairing quality (%)', $quality['pairing_quality'] ?? '']);
+            fputcsv($handle, ['Unmatched reads', $quality['unmatched_reads']]);
+            fputcsv($handle, ['Cameras offline', $quality['cameras_offline']]);
         }
 
         rewind($handle);

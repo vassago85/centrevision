@@ -5,9 +5,11 @@
     </head>
     <body class="min-h-screen bg-page font-sans text-ink antialiased">
 
-        @persist('sidebar')
-            <x-sidebar />
-        @endpersist
+        {{-- Not @persist'ed: the sidebar computes its "current tab" highlight
+             in Blade using request()->routeIs(), so it must re-render on
+             every wire:navigate. Persisting it froze the highlight on
+             whichever tab was current at initial page load. --}}
+        <x-sidebar />
 
         <main class="lg:pl-[264px]">
             <div class="mx-auto max-w-[1200px] px-5 pt-6 pb-16 sm:px-8">

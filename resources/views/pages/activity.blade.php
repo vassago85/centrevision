@@ -77,23 +77,21 @@ new #[Title('Activity')] class extends Component
     }
 
     /**
-     * Cameras the operator can pick between. Site-scoped through the
-     * global SiteScope on the Camera model, so a tampered site switcher
-     * never widens this list.
+     * Cameras the operator can pick between. The Camera model's global
+     * SiteScope already narrows to what the tenant can reach — the
+     * picked site when one is selected, or every accessible site when
+     * the switcher is on "All sites". We deliberately do NOT filter to
+     * currentSite() again here, because that collapsed the list to
+     * nothing whenever an owner viewed all their sites and made the
+     * "Cameras" summary metric render as 0 next to a table that was
+     * clearly showing detections.
      *
      * @return Collection<int, Camera>
      */
     #[Computed]
     public function cameras(): Collection
     {
-        $site = app(Tenancy::class)->currentSite();
-
-        if ($site === null) {
-            return collect();
-        }
-
         return Camera::query()
-            ->where('site_id', $site->getKey())
             ->where('is_active', true)
             ->orderBy('name')
             ->get(['id', 'name']);

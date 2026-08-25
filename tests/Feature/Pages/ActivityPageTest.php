@@ -104,6 +104,28 @@ it('narrows to a single camera when a filter is applied', function () {
         ->assertDontSee('CAMTWO01');
 });
 
+it('counts cameras across every accessible site when the switcher is on All sites', function () {
+    // Previously the "Cameras" summary metric hard-coded to currentSite()
+    // and rendered "0" whenever an owner viewed all sites — even though
+    // the detections table plainly showed events from real cameras. The
+    // fix is to let the Camera global SiteScope do the narrowing so
+    // "All sites" widens to every accessible site.
+    $mallB = Site::factory()->for_($this->owner)->create(['name' => 'Mall B']);
+    Camera::factory()->for($mallB)->entrance()->create(['name' => 'West gate']);
+
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+    // Leaving currentSiteId unset = the "All sites" position of the switcher.
+
+    Livewire::test('pages::activity')
+        // Three active cameras total: two on Mall A (from beforeEach) plus
+        // West gate on Mall B. hasMultipleCameras kicks in, so the metric
+        // renders "3 active" rather than the bare count.
+        ->assertSee('3 active')
+        // The camera filter is now useful across sites too, so the
+        // "All cameras" dropdown option is rendered.
+        ->assertSee('All cameras');
+});
+
 it('hides the camera filter for a single-camera site', function () {
     $solo = Site::factory()->for_($this->owner)->create(['name' => 'Mall Solo']);
     Camera::factory()->for($solo)->entrance()->create(['name' => 'Only camera']);

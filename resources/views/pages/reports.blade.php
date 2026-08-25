@@ -11,6 +11,7 @@ use App\Support\Reporting\ReportExporter;
 use App\Support\Reporting\TrafficReport;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -244,12 +245,12 @@ new #[Title('Reports')] class extends Component {
             [
                 'label' => 'Busiest day',
                 'value' => $busiest['label'] ?? '—',
-                'detail' => $busiest ? number_format($busiest['count']).' visits' : null,
+                'detail' => $busiest ? number_format($busiest['count']).' '.Str::plural('visit', $busiest['count']) : null,
             ],
             [
                 'label' => 'Peak hour',
                 'value' => $peak['label'] ?? '—',
-                'detail' => $peak === null ? null : number_format($peak['count']).' visits',
+                'detail' => $peak === null ? null : number_format($peak['count']).' '.Str::plural('visit', $peak['count']),
             ],
             [
                 'label' => 'Median dwell',

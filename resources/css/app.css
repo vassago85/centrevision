@@ -161,6 +161,19 @@
     border-bottom-color: transparent;
 }
 
+/*
+ * Column gutter. Adjacent cells otherwise collide when a right-aligned
+ * numeric column sits next to a left-aligned text column — e.g. on the
+ * Cameras page the "Reads Today" header (flush right) touched the
+ * "Last Read" header (flush left) and rendered as "Reads TodayLast Read".
+ * Applied only to cells that follow another cell so the first column
+ * stays aligned with the panel's own padding.
+ */
+[data-tf-table] > thead > tr > th + th,
+[data-tf-table] > tbody > tr > td + td {
+    padding-inline-start: 1rem;
+}
+
 /* Flux form controls, retinted to the TrafficFlow palette. */
 [data-flux-field]:not(ui-radio, ui-checkbox) {
     @apply grid gap-2;

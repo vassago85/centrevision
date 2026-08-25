@@ -136,6 +136,36 @@ If nothing arrives, work down the failure ladder in the next section.
 - The camera is sending heartbeats but not vehicle events. Check
   `Configuration → Event → Smart Event → Road Traffic → Detection
   Configuration`: the detection rule must be enabled with a valid area drawn.
+- The camera is sending Motion Detection (VMD) events instead of ANPR. Every
+  quarantined body will look like `<eventType>VMD</eventType>` in
+  `storage/app/private/hikvision-webhook-quarantine/{camera_id}/`. That means
+  Motion Detection has `Notify Surveillance Center` ticked but Vehicle
+  Detection does not. Untick it under Basic Event → Motion Detection →
+  Linkage Method, then re-tick HTTP Listening under Vehicle Detection.
+
+**Camera was working, then abruptly stopped after a server outage.**
+
+Some Hikvision firmwares self-disable "Notify Surveillance Center" on an
+event after prolonged HTTP failures (auth loops, 5xx, connection reset).
+The camera will keep sending the smaller events (motion, heartbeat) but
+silently drop ANPR notifications until an operator re-enables the linkage.
+
+Recovery checklist on the camera:
+
+1. `Configuration → Event → Smart Event → Road Traffic → Vehicle Detection`
+   — confirm the rule is still Enabled with an area drawn.
+2. Same page, **Linkage Method** tab — confirm both `Notify Surveillance
+   Center` and `HTTP Listening` are ticked.
+3. **Save** even if they look already-ticked. A fresh operator save resets
+   the internal back-off flag. This is the fix that clears the self-disable.
+4. Drive a vehicle past — a new row must appear in `plate_events` within a
+   couple of seconds.
+
+If step 4 still fails, run the smoke test in the next section from any
+laptop on the customer's network. If the smoke test writes a plate event
+but the camera does not, the delta is on the camera side (rule disabled,
+detection area removed, HTTP Listening unticked). If the smoke test also
+fails, the delta is on the server side and the app logs will say why.
 
 **`401 Unauthorized` in the camera log.**
 

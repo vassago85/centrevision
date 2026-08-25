@@ -7,13 +7,18 @@ return [
     | Ingestion
     |--------------------------------------------------------------------------
     |
-    | Cameras reach us two ways: a long-lived ISAPI alert stream per camera, and
-    | a sweep of the directory cameras FTP their captures into. The sweep is the
-    | reliability fallback for when a stream drops.
+    | Cameras reach us three ways: an outbound HTTP webhook, a long-lived ISAPI
+    | alert stream per camera, and a sweep of the directory cameras FTP their
+    | captures into. The sweep is a reliability fallback.
+    |
+    | The default drop path matches the `hik-drop` volume mounted at
+    | `storage/app/private/hikvision-drop` by docker-compose. Overriding via
+    | `TRAFFICFLOW_PLATE_DROP_PATH` is only necessary when the deployment mounts
+    | the FTP directory somewhere else.
     |
     */
 
-    'plate_drop_path' => env('TRAFFICFLOW_PLATE_DROP_PATH') ?: storage_path('app/private/plate-drop'),
+    'plate_drop_path' => env('TRAFFICFLOW_PLATE_DROP_PATH') ?: storage_path('app/private/hikvision-drop'),
 
     // Two captures of the same plate on the same camera inside this window are
     // treated as one event.

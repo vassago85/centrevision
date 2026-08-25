@@ -134,7 +134,7 @@ it('surfaces the compact fleet summary with online / stale / offline / reads tod
         ->assertSee('Reads today');
 });
 
-it('renames the operational columns to Reads Today and Last Read', function () {
+it('renames the operational columns to Reads Today and Last Seen', function () {
     Camera::factory()->for($this->site)->create([
         'name' => 'North',
         'last_event_at' => now()->subMinute(),
@@ -142,11 +142,35 @@ it('renames the operational columns to Reads Today and Last Read', function () {
 
     Livewire::test('pages::cameras')
         // Commercial ANPR product wording — reads, not events — everywhere
-        // this page describes ingestion activity.
+        // this page describes ingestion activity. "Last Seen" (any signal
+        // from the camera) rather than "Last Read" (only plate reads),
+        // because a quiet-but-alive camera should not look alarming.
         ->assertSee('Reads Today')
-        ->assertSee('Last Read')
+        ->assertSee('Last Seen')
         ->assertDontSee('Events today')
-        ->assertDontSee('Last event');
+        ->assertDontSee('Last event')
+        ->assertDontSee('Last Read');
+});
+
+it('shows the most recent liveness signal in the Last Seen column, not only plate reads', function () {
+    // Freeze time so diffForHumans() renders a deterministic string; a
+    // relative-time assertion is otherwise flaky under a slow CI worker.
+    Illuminate\Support\Facades\Date::setTestNow('2026-08-25 12:00:00');
+
+    // Camera has no plate read all day but is pinging us every minute
+    // via the Alarm Server keepalive. The Last Seen column should reflect
+    // the ping, not the two-hour-old plate read.
+    Camera::factory()->for($this->site)->create([
+        'name' => 'Quiet camera',
+        'last_event_at' => now()->subHours(2),
+        'webhook_last_seen_at' => now()->subMinute(),
+    ]);
+
+    Livewire::test('pages::cameras')
+        // Presence of the ping's relative time and absence of the plate
+        // read's proves we picked the newer of the two signals.
+        ->assertSee('1 minute ago')
+        ->assertDontSee('2 hours ago');
 });
 
 it('creates a webhook camera without requiring an IP address', function () {

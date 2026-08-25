@@ -231,6 +231,22 @@ it('quarantines an unparseable payload without crashing', function () {
         ->and($quarantineFiles)->toHaveCount(1);
 });
 
+it('ticks webhook_last_seen_at even when the payload is quarantined', function () {
+    // A payload we cannot decode still proves the camera is alive to reach
+    // us — motion, video-loss, tampering, and other Hikvision alert types
+    // that are not plate reads all land here. The Cameras page relies on
+    // this timestamp for the "Last Seen" column and the Health rollup.
+    expect($this->camera->fresh()->webhook_last_seen_at)->toBeNull();
+
+    postHikWebhook(
+        $this->camera,
+        'not xml, not a boundary, definitely not an event',
+        'text/plain',
+    )->assertOk();
+
+    expect($this->camera->fresh()->webhook_last_seen_at)->not->toBeNull();
+});
+
 it('silently accepts an empty body so keepalive pings do not go into back-off', function () {
     postHikWebhook($this->camera, '', 'application/xml')->assertOk();
 

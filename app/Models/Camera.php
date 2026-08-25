@@ -186,4 +186,26 @@ class Camera extends Model implements SiteScoped
             || ($this->last_probe_ok_at !== null && $this->last_probe_ok_at->greaterThan($threshold))
             || ($this->webhook_last_seen_at !== null && $this->webhook_last_seen_at->greaterThan($threshold));
     }
+
+    /**
+     * The most recent time we heard anything from this camera — a plate
+     * read, a successful probe, or a webhook heartbeat. Powers the
+     * "Last Seen" column so a healthy camera that has not read a plate
+     * for hours still shows a fresh timestamp (from its keepalive pings)
+     * rather than an alarming last-plate-read time.
+     */
+    public function lastSeenAt(): ?CarbonInterface
+    {
+        $candidates = array_filter([
+            $this->last_event_at,
+            $this->last_probe_ok_at,
+            $this->webhook_last_seen_at,
+        ]);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        return collect($candidates)->max();
+    }
 }

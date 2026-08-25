@@ -427,7 +427,7 @@ new #[Title('Cameras')] class extends Component {
 
     <x-panel heading="Devices">
         <x-data-table
-            :headers="['Camera', 'Site', 'Direction', 'Connection', 'Health', ['label' => 'Reads Today', 'align' => 'right'], 'Last Read', ['label' => '', 'align' => 'right']]"
+            :headers="['Camera', 'Site', 'Direction', 'Connection', 'Health', ['label' => 'Reads Today', 'align' => 'right'], 'Last Seen', ['label' => '', 'align' => 'right']]"
             :is-empty="$this->cameras->isEmpty()"
             empty="No cameras yet. Add the first one to start ingesting plates."
         >
@@ -468,7 +468,12 @@ new #[Title('Cameras')] class extends Component {
                         {{ number_format($camera->events_today ?? 0) }}
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">
-                        {{ $camera->last_event_at?->diffForHumans() ?? '—' }}
+                        {{-- "Last Seen" is the newest of plate reads, successful
+                             probes and webhook heartbeats — so a quiet-but-alive
+                             camera keeps ticking here even when no plate has
+                             been read for hours. Health above tells the operator
+                             whether that recency is inside the stale window. --}}
+                        {{ $camera->lastSeenAt()?->diffForHumans() ?? '—' }}
                     </td>
                     <td class="border-b border-line py-2 text-right">
                         <div class="flex justify-end gap-1">
@@ -766,7 +771,7 @@ new #[Title('Cameras')] class extends Component {
                             <span class="font-medium text-ink">Notify Surveillance Center</span> (some firmware labels this row
                             <span class="font-medium text-ink">HTTP Listening</span>) for every detection rule.
                         </li>
-                        <li>Save. Drive a plate past and watch the "Last Read" column on this page tick over.</li>
+                        <li>Save. Drive a plate past and watch the "Last Seen" column on this page tick over.</li>
                     </ol>
                 </div>
 

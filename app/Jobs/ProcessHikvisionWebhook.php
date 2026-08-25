@@ -71,6 +71,14 @@ class ProcessHikvisionWebhook implements ShouldQueue
             return;
         }
 
+        // The camera reached us and sent bytes, so it is alive regardless of
+        // whether we can parse the payload. Tick the health timestamp up
+        // front so unparseable alerts (motion, video-loss, vehicle detected
+        // without a plate, etc.) still count as proof of life on the
+        // Cameras page — the alternative was the operator seeing "Last
+        // Seen: 2h ago" for a camera that had been pinging every minute.
+        $camera->forceFill(['webhook_last_seen_at' => now()])->saveQuietly();
+
         $event = $parser->parse($body, $this->contentType);
 
         if ($event === null) {
@@ -99,10 +107,6 @@ class ProcessHikvisionWebhook implements ShouldQueue
         if ($plateEvent !== null && $event->attachments !== []) {
             $this->storeAttachments($camera, $plateEvent->getKey(), $event->attachments);
         }
-
-        // Always tick the health timestamp, even when the recorder dropped
-        // the capture as a duplicate: the camera is clearly alive.
-        $camera->forceFill(['webhook_last_seen_at' => now()])->saveQuietly();
 
         $disk->delete($this->inboxKey);
     }

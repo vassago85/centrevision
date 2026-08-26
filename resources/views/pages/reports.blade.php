@@ -7,6 +7,7 @@ use App\Support\Analytics\DayContextAnalytics;
 use App\Support\Analytics\OccupancyAnalytics;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\TrafficAnalytics;
+use App\Support\Analytics\WeatherImpactAnalytics;
 use App\Support\Reporting\ReportExporter;
 use App\Support\Reporting\TrafficReport;
 use App\Support\Tenancy;
@@ -39,6 +40,15 @@ new #[Title('Reports')] class extends Component {
 
     #[Url(as: 'to', keep: true)]
     public ?string $toDate = null;
+
+    /**
+     * When true, wet days ({@see DayContextAnalytics::WET_LABELS}) are dropped
+     * from the visits-per-day chart. Off by default so every headline number
+     * stays comparable to what the Reports page has always shown; owners
+     * opt in when they want a weather-normalised trend.
+     */
+    #[Url(as: 'exclude_wet', keep: true)]
+    public bool $excludeWet = false;
 
     public function mount(): void
     {
@@ -296,6 +306,20 @@ new #[Title('Reports')] class extends Component {
             ];
         });
 
+        // Weather-normalisation. Only applies to daily-grain series — an
+        // hourly chart already lives inside a single day so "exclude wet
+        // days" has no meaning at that grain, and a weekly-grain bar can't
+        // be cleanly split by daily weather either.
+        if ($this->excludeWet && $this->range()->grain() === 'day') {
+            $wetDates = array_flip(
+                app(DayContextAnalytics::class)->wetDates($this->range()),
+            );
+
+            $paired = $paired
+                ->reject(fn (array $day) => isset($wetDates[substr((string) $day['date'], 0, 10)]))
+                ->values();
+        }
+
         return [
             'labels' => $paired->pluck('label')->all(),
             'dates' => $paired->pluck('date')->all(),
@@ -308,6 +332,28 @@ new #[Title('Reports')] class extends Component {
     public function dayContext(): Collection
     {
         return app(DayContextAnalytics::class)->forRange($this->range());
+    }
+
+    /**
+     * Weather-vs-visits comparison. Null when there is no weather data at
+     * all for this range (no sites with coordinates, or the enrichment
+     * job hasn't run yet). A returned shape with `has_enough_data = false`
+     * means "we have some data, but not enough to publish a percentage" —
+     * the card renders an honest empty state in that case.
+     *
+     * @return array{
+     *   has_enough_data: bool,
+     *   wet_days_count: int,
+     *   dry_days_count: int,
+     *   wet_avg_visits: int|null,
+     *   dry_avg_visits: int|null,
+     *   delta_percent: float|null,
+     * }|null
+     */
+    #[Computed]
+    public function weatherImpact(): ?array
+    {
+        return app(WeatherImpactAnalytics::class)->forRange($this->range());
     }
 
     /**
@@ -604,9 +650,26 @@ new #[Title('Reports')] class extends Component {
                     <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits per day</p>
                     <p class="mt-1 text-sm text-ink-2">
                         {{ $this->compareKey === 'none' ? 'Selected period' : 'This period vs '.strtolower(DateRange::comparisonOptions()[$compareKey]) }}
+                        @if ($this->excludeWet && $this->range->grain() === 'day')
+                            <span class="text-ink-muted">· wet days hidden</span>
+                        @endif
                     </p>
                 </div>
                 <div class="flex items-center gap-2">
+                    {{-- Only meaningful on daily-grain charts. An hourly view is
+                         already inside one day; a weekly bar can't be split by
+                         daily weather. We hide the toggle in those cases so the
+                         UI doesn't offer a control that has no effect. --}}
+                    @if ($this->range->grain() === 'day')
+                        <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
+                            <input
+                                type="checkbox"
+                                wire:model.live="excludeWet"
+                                class="size-3 rounded border-line text-accent focus:ring-accent"
+                            />
+                            <span>Exclude wet days</span>
+                        </label>
+                    @endif
                     <flux:select wire:model.live="chartMetric" size="sm" class="min-w-40" label="Metric" label:sr-only>
                         <flux:select.option value="visits">Visits</flux:select.option>
                         <flux:select.option value="unique">Unique visitors</flux:select.option>
@@ -661,6 +724,90 @@ new #[Title('Reports')] class extends Component {
                 </div>
             @endif
         </x-panel-card>
+
+        {{-- ── Weather impact card ────────────────────────────────────────
+             The chip strip above says *which* days were wet; this card says
+             by how much they hurt. Only rendered when the tenant has any
+             weather data at all — an owner who has never set coordinates
+             sees no card, not an empty one. --}}
+        @if ($this->weatherImpact !== null)
+            @php
+                $wx = $this->weatherImpact;
+                $delta = $wx['delta_percent'];
+                $deltaTone = match (true) {
+                    $delta === null => 'text-ink-2',
+                    $delta <= -5.0 => 'text-danger',
+                    $delta >= 5.0 => 'text-success',
+                    default => 'text-ink-2',
+                };
+            @endphp
+            <x-panel-card class="mb-6">
+                <x-slot:header>
+                    <div class="flex items-center gap-3">
+                        <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
+                            <flux:icon icon="cloud" class="size-4" />
+                        </span>
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Weather impact</p>
+                            <p class="mt-1 text-sm text-ink-2">
+                                Wet days ({{ implode(', ', \App\Support\Analytics\DayContextAnalytics::WET_LABELS) }}) vs dry days over this period
+                            </p>
+                        </div>
+                    </div>
+                </x-slot:header>
+
+                @if ($wx['has_enough_data'])
+                    <div class="grid gap-4 sm:grid-cols-3">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Wet days</p>
+                            <p class="mt-1 text-[22px] font-semibold text-ink tabular-nums">
+                                {{ number_format($wx['wet_avg_visits']) }}
+                            </p>
+                            <p class="text-[11.5px] text-ink-muted">
+                                avg / day · {{ $wx['wet_days_count'] }} {{ Str::plural('day', $wx['wet_days_count']) }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Dry days</p>
+                            <p class="mt-1 text-[22px] font-semibold text-ink tabular-nums">
+                                {{ number_format($wx['dry_avg_visits']) }}
+                            </p>
+                            <p class="text-[11.5px] text-ink-muted">
+                                avg / day · {{ $wx['dry_days_count'] }} {{ Str::plural('day', $wx['dry_days_count']) }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Weekday-adjusted effect</p>
+                            <p class="mt-1 text-[22px] font-semibold tabular-nums {{ $deltaTone }}">
+                                @if ($delta === null)
+                                    —
+                                @else
+                                    {{ $delta > 0 ? '+' : '' }}{{ number_format($delta, 1) }}%
+                                @endif
+                            </p>
+                            <p class="text-[11.5px] text-ink-muted">
+                                @if ($delta === null)
+                                    Not enough dry-day baseline
+                                @elseif ($delta < 0)
+                                    Wet days averaged {{ number_format(abs($delta), 1) }}% fewer visits than the same weekday in dry weather
+                                @elseif ($delta > 0)
+                                    Wet days averaged {{ number_format($delta, 1) }}% more visits — likely noise, widen the range
+                                @else
+                                    No measurable difference this period
+                                @endif
+                            </p>
+                        </div>
+                    </div>
+                @else
+                    <p class="text-[13px] text-ink-2">
+                        Not enough data for a reliable comparison yet
+                        ({{ $wx['wet_days_count'] }} {{ Str::plural('wet day', $wx['wet_days_count']) }},
+                        {{ $wx['dry_days_count'] }} {{ Str::plural('dry day', $wx['dry_days_count']) }} in range).
+                        Try a longer window — 30 or 90 days usually surfaces enough weather variation to compare.
+                    </p>
+                @endif
+            </x-panel-card>
+        @endif
     @endif
 
     @if ($section === 'overview' && $this->canSeeOps)

@@ -38,6 +38,16 @@ new #[Title('Dashboard')] class extends Component
     public bool $excludeHolidays = false;
 
     /**
+     * Parallel to $excludeHolidays: when on, wet days (see
+     * DayContextAnalytics::WET_LABELS) are dropped from the "Visits Over Time"
+     * chart so an owner comparing this week to last isn't reading weather
+     * noise as a real trend. Off by default so the numbers stay comparable
+     * to what the dashboard has always shown until the owner opts in.
+     */
+    #[Url(as: 'exclude_wet', keep: true)]
+    public bool $excludeWet = false;
+
+    /**
      * Optional camera filter for the plate-level "Latest activity" card.
      * Aggregate KPIs and charts stay site-wide — shoppers-per-camera is
      * useful, but a return-rate that changes when you flip cameras isn't.
@@ -352,6 +362,16 @@ new #[Title('Dashboard')] class extends Component
 
             $paired = $paired
                 ->reject(fn (array $day) => isset($holidayDates[$day['date']]))
+                ->values();
+        }
+
+        if ($this->excludeWet) {
+            $wetDates = array_flip(
+                app(DayContextAnalytics::class)->wetDates($this->range),
+            );
+
+            $paired = $paired
+                ->reject(fn (array $day) => isset($wetDates[$day['date']]))
                 ->values();
         }
 
@@ -725,12 +745,15 @@ new #[Title('Dashboard')] class extends Component
                         @if ($this->excludeHolidays)
                             <span class="text-ink-muted">· holidays hidden</span>
                         @endif
+                        @if ($this->excludeWet)
+                            <span class="text-ink-muted">· wet days hidden</span>
+                        @endif
                     </p>
                 </div>
-                <div class="flex items-center gap-2">
-                    {{-- Opt-in filter. Off by default so headline KPIs and
+                <div class="flex flex-wrap items-center gap-2">
+                    {{-- Opt-in filters. Off by default so headline KPIs and
                          chart bars are never quietly changed under the user;
-                         the toggle only rearranges this one chart. --}}
+                         the toggles only rearrange this one chart. --}}
                     <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
                         <input
                             type="checkbox"
@@ -738,6 +761,14 @@ new #[Title('Dashboard')] class extends Component
                             class="size-3 rounded border-line text-accent focus:ring-accent"
                         />
                         <span>Exclude holidays</span>
+                    </label>
+                    <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
+                        <input
+                            type="checkbox"
+                            wire:model.live="excludeWet"
+                            class="size-3 rounded border-line text-accent focus:ring-accent"
+                        />
+                        <span>Exclude wet days</span>
                     </label>
                     <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">Daily</span>
                 </div>

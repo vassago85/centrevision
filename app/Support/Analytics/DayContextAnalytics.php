@@ -24,6 +24,18 @@ use Illuminate\Support\Collection;
 class DayContextAnalytics
 {
     /**
+     * WMO-derived weather labels that count as "wet" for the exclude-wet
+     * toggle and the weather-impact metric. Kept in one place so the chart
+     * chip strip, the daily "Exclude wet days" filter, and the impact
+     * comparison never drift apart. Drizzle and Fog are deliberately out —
+     * they show up as tooltips but historically don't move shopper counts
+     * far enough to be worth flagging as "notable weather".
+     *
+     * @var array<int, string>
+     */
+    public const WET_LABELS = ['Rain', 'Thunderstorm', 'Snow'];
+
+    /**
      * Per-day context rows for the given range, keyed by ISO date. Rows
      * exist only for days we've enriched — a call for "last 30 days" on a
      * freshly-installed system may return fewer than 30 entries.
@@ -102,6 +114,24 @@ class DayContextAnalytics
     {
         return $this->forRange($range)
             ->filter(fn (array $ctx) => $ctx['is_public_holiday'])
+            ->keys()
+            ->all();
+    }
+
+    /**
+     * Local dates within the range where the collapsed weather label is
+     * one of {@see self::WET_LABELS}. Used by the "Exclude wet days" toggle
+     * to filter the daily series so period-over-period comparisons aren't
+     * dragged down by rainstorms that happened to fall in this month but
+     * not last.
+     *
+     * @return array<int, string>
+     */
+    public function wetDates(DateRange $range): array
+    {
+        return $this->forRange($range)
+            ->filter(fn (array $ctx) => $ctx['weather_label'] !== null
+                && in_array($ctx['weather_label'], self::WET_LABELS, true))
             ->keys()
             ->all();
     }

@@ -9,13 +9,56 @@
     // and quietly stops if the connection drops — which is the honest signal
     // that something is wrong.
     'live' => false,
+    // Optional current-conditions pill for the tenant's site(s). Null (or
+    // any shape with both temp_c and weather_label null) hides the pill
+    // silently — a header that spits out an error card because Open-Meteo
+    // burped would be worse than no weather at all.
+    'weather' => null,
 ])
 
+@php
+    $hasWeather = is_array($weather)
+        && (($weather['weather_label'] ?? null) !== null || ($weather['temp_c'] ?? null) !== null);
+
+    // "Clear" and "Mainly clear" get a sun; thunderstorms get a bolt. Everything
+    // else falls back to a generic cloud — same convention the notable-days
+    // chips already use, keeping the weather visual language consistent.
+    $weatherIcon = match ($weather['weather_label'] ?? null) {
+        'Clear', 'Mainly clear' => 'sun',
+        'Thunderstorm' => 'bolt',
+        default => 'cloud',
+    };
+@endphp
+
 <div {{ $attributes->class('mb-6 flex flex-wrap items-center justify-between gap-3') }}>
-    <div>
-        <h1 class="text-[26px] font-semibold tracking-tight text-ink">{{ $title }}</h1>
-        @if ($subtitle)
-            <p class="mt-1 text-sm text-ink-2">{{ $subtitle }}</p>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div>
+            <h1 class="text-[26px] font-semibold tracking-tight text-ink">{{ $title }}</h1>
+            @if ($subtitle)
+                <p class="mt-1 text-sm text-ink-2">{{ $subtitle }}</p>
+            @endif
+        </div>
+
+        @if ($hasWeather)
+            {{-- Live "now" conditions for the site(s) in scope. Suppressed
+                 entirely when we have no coordinates or upstream is down —
+                 a pill that flickers between values and blanks would be
+                 more distracting than useful. --}}
+            <span
+                class="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2"
+                title="{{ __('Current conditions') }}"
+            >
+                <flux:icon :icon="$weatherIcon" class="size-3.5" />
+                @if (($weather['weather_label'] ?? null) !== null)
+                    <span>{{ $weather['weather_label'] }}</span>
+                @endif
+                @if (($weather['temp_c'] ?? null) !== null)
+                    <span class="tabular-nums">
+                        @if (($weather['weather_label'] ?? null) !== null) · @endif
+                        {{ round((float) $weather['temp_c']) }}°C
+                    </span>
+                @endif
+            </span>
         @endif
     </div>
 

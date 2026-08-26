@@ -11,6 +11,7 @@ use App\Support\Analytics\DayContextAnalytics;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\TrafficAnalytics;
 use App\Support\Tenancy;
+use App\Support\Weather\CurrentWeather;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -376,6 +377,20 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
+     * Live "now" weather pill for the header. Null when nothing worth
+     * rendering — no sites in scope, none with coordinates, or upstream
+     * failure. Cached per site by the service, so the wire:poll cycle
+     * doesn't re-hit Open-Meteo on every render.
+     *
+     * @return array{temp_c: float|null, weather_code: int|null, weather_label: string|null}|null
+     */
+    #[Computed]
+    public function headerWeather(): ?array
+    {
+        return app(CurrentWeather::class)->forCurrentView();
+    }
+
+    /**
      * Extra tooltip lines for the daily chart, keyed by the chart's own
      * "j M" label. Callers pass this straight to <x-chart annotations>.
      *
@@ -637,6 +652,7 @@ new #[Title('Dashboard')] class extends Component
         :subtitle="'What is happening at your centre · '.strtolower($this->range->label)"
         :alert-count="$this->canSeeSecurity ? $this->alertCounts['total'] : 0"
         :show-bell="$this->canSeeSecurity"
+        :weather="$this->headerWeather"
         live
     >
         <x-slot:actions>

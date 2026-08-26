@@ -2,6 +2,7 @@
 
 namespace App\Support\Weather;
 
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -85,6 +86,58 @@ class OpenMeteoClient
         }
 
         return $out;
+    }
+
+    /**
+     * Now-ish observation for one coordinate. Uses the forecast host's
+     * `current=` parameter which returns a single stamped reading; Open-Meteo
+     * refreshes this every ~15 minutes upstream.
+     *
+     * Returns null on any failure — the caller (dashboard header pill) treats
+     * "no data" as "hide the pill", never as an error banner. That matches
+     * the daily lookup's silent-failure contract.
+     *
+     * @return array{temp_c: float|null, weather_code: int|null, observed_at: CarbonImmutable}|null
+     */
+    public function current(
+        float $latitude,
+        float $longitude,
+        string $timezone = 'Africa/Johannesburg',
+    ): ?array {
+        $response = Http::acceptJson()
+            ->timeout(10)
+            ->retry(2, 250)
+            ->get(self::FORECAST_URL, [
+                'latitude' => round($latitude, 4),
+                'longitude' => round($longitude, 4),
+                'timezone' => $timezone,
+                'current' => 'temperature_2m,weather_code',
+            ]);
+
+        if (! $response->successful()) {
+            Log::warning('Open-Meteo current lookup failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'lat' => $latitude,
+                'lng' => $longitude,
+            ]);
+
+            return null;
+        }
+
+        $current = $response->json('current');
+
+        if (! is_array($current)) {
+            return null;
+        }
+
+        return [
+            'temp_c' => isset($current['temperature_2m']) ? (float) $current['temperature_2m'] : null,
+            'weather_code' => isset($current['weather_code']) ? (int) $current['weather_code'] : null,
+            'observed_at' => isset($current['time'])
+                ? CarbonImmutable::parse((string) $current['time'], $timezone)
+                : CarbonImmutable::now($timezone),
+        ];
     }
 
     /**

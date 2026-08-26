@@ -15,7 +15,7 @@ use Livewire\Component;
 
 new #[Title('Sites')] class extends Component
 {
-    /** Null while adding, otherwise the id of the site being renamed. */
+    /** Null while adding, otherwise the id of the site being edited. */
     public ?int $editingId = null;
 
     public bool $showForm = false;
@@ -42,6 +42,36 @@ new #[Title('Sites')] class extends Component
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ];
+    }
+
+    /**
+     * Google Maps' right-click context menu copies coordinates as a single
+     * "lat, lng" string (e.g. "-26.17111, 28.32843"). If a comma appears in
+     * the latitude field we treat that as a pasted pair and split it into
+     * both fields, so the owner doesn't have to edit the string by hand.
+     *
+     * A plain single number is left alone. A malformed pair (non-numeric
+     * halves) is also left alone so validation surfaces the real problem
+     * rather than us silently swallowing the paste.
+     */
+    public function updatedLatitude(): void
+    {
+        if (! str_contains($this->latitude, ',')) {
+            return;
+        }
+
+        [$lat, $lng] = array_pad(
+            array_map('trim', explode(',', $this->latitude, 2)),
+            2,
+            '',
+        );
+
+        if (! is_numeric($lat) || ! is_numeric($lng)) {
+            return;
+        }
+
+        $this->latitude = $lat;
+        $this->longitude = $lng;
     }
 
     /**
@@ -151,7 +181,7 @@ new #[Title('Sites')] class extends Component
             Flux::toast(variant: 'success', text: 'Site updated.');
         }
 
-        // Fresh render pulls the new/renamed site into the cards below and
+        // Fresh render pulls the new/updated site into the cards below and
         // the site switcher in the sidebar.
         unset($this->sites);
         $this->showForm = false;
@@ -420,7 +450,7 @@ new #[Title('Sites')] class extends Component
                             @unless ($isCurrent)
                                 <flux:button size="xs" variant="primary" wire:click="focus({{ $row->site->id }})">Open site</flux:button>
                             @endunless
-                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $row->site->id }})">Rename</flux:button>
+                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $row->site->id }})">Edit</flux:button>
                             <flux:button size="xs" variant="ghost" :href="route('cameras')" wire:navigate>Cameras</flux:button>
                         </div>
                     </footer>
@@ -429,12 +459,12 @@ new #[Title('Sites')] class extends Component
         </div>
     @endif
 
-    {{-- ── Add / rename site modal ─────────────────────────────────────
-         Kept small — a site is just a name and an address at this stage.
-         Cameras, subscriptions and shops are all set up on their own tabs. --}}
+    {{-- ── Add / edit site modal ───────────────────────────────────────
+         The same form covers name, address, and coordinates. Cameras,
+         subscriptions and shops are all set up on their own tabs. --}}
     <flux:modal wire:model.self="showForm" class="md:w-[28rem]">
         <form wire:submit="save" class="space-y-5">
-            <flux:heading size="lg">{{ $editingId ? 'Rename site' : 'Add site' }}</flux:heading>
+            <flux:heading size="lg">{{ $editingId ? 'Edit site' : 'Add site' }}</flux:heading>
 
             <flux:input
                 wire:model="name"
@@ -451,21 +481,29 @@ new #[Title('Sites')] class extends Component
 
             {{-- Coordinates unlock the weather + holiday markers on the daily
                  chart. They're optional: a site without them still shows every
-                 KPI, just no weather overlay. Copy/paste from Google Maps is
-                 the intended workflow — good enough for mall-scale precision. --}}
-            <div class="grid gap-3 sm:grid-cols-2">
-                <flux:input
-                    wire:model="latitude"
-                    label="Latitude (optional)"
-                    placeholder="-25.7847"
-                    inputmode="decimal"
-                />
-                <flux:input
-                    wire:model="longitude"
-                    label="Longitude (optional)"
-                    placeholder="28.2769"
-                    inputmode="decimal"
-                />
+                 KPI, just no weather overlay. Latitude uses .blur so that
+                 pasting a "lat, lng" pair from Google Maps triggers the
+                 updatedLatitude splitter the moment focus leaves the field. --}}
+            <div class="space-y-1">
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <flux:input
+                        wire:model.blur="latitude"
+                        label="Latitude (optional)"
+                        placeholder="-25.7847 or -25.7847, 28.2769"
+                        inputmode="decimal"
+                    />
+                    <flux:input
+                        wire:model="longitude"
+                        label="Longitude (optional)"
+                        placeholder="28.2769"
+                        inputmode="decimal"
+                    />
+                </div>
+                <p class="text-[11px] text-ink-2">
+                    Tip: right-click the spot on Google Maps and click the coordinates
+                    to copy. Paste the whole pair into Latitude — we'll split it into
+                    both fields for you.
+                </p>
             </div>
 
             @if (! $editingId)

@@ -137,7 +137,9 @@ class AlertStreamParser
     }
 
     /**
-     * Hikvision reports confidence as 0-100; we store 0-1.
+     * Hikvision reports confidence as 0-100 on modern firmware. V5.5 DeepinView
+     * ANPR (e.g. iDS-2CD7A26G0) sends tenths of a percent instead — 920 means
+     * 92.0%. We store 0-1 either way.
      */
     protected function parseConfidence(mixed $value): ?float
     {
@@ -147,7 +149,15 @@ class AlertStreamParser
 
         $confidence = (float) $value;
 
-        return $confidence > 1 ? round($confidence / 100, 4) : $confidence;
+        if ($confidence <= 1) {
+            return $confidence;
+        }
+
+        if ($confidence <= 100) {
+            return round($confidence / 100, 4);
+        }
+
+        return min(1.0, round($confidence / 1000, 4));
     }
 
     public function buffered(): string

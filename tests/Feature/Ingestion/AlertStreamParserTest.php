@@ -6,8 +6,12 @@ use App\Services\Isapi\AlertStreamParser;
 /**
  * One ANPR alert as Hikvision sends it on the ISAPI stream.
  */
-function alertXml(string $plate = 'JD45GP', string $direction = 'forward', string $dateTime = '2026-08-02T10:15:30+02:00'): string
-{
+function alertXml(
+    string $plate = 'JD45GP',
+    string $direction = 'forward',
+    string $dateTime = '2026-08-02T10:15:30+02:00',
+    int|float|string $confidence = 92,
+): string {
     return <<<XML
     <?xml version="1.0" encoding="UTF-8"?>
     <EventNotificationAlert version="2.0">
@@ -21,7 +25,7 @@ function alertXml(string $plate = 'JD45GP', string $direction = 'forward', strin
             <licensePlate>{$plate}</licensePlate>
             <line>1</line>
             <direction>{$direction}</direction>
-            <confidenceLevel>92</confidenceLevel>
+            <confidenceLevel>{$confidence}</confidenceLevel>
             <plateType>unknown</plateType>
         </ANPR>
     </EventNotificationAlert>
@@ -42,6 +46,18 @@ function multipart(string ...$documents): string
 
     return $body;
 }
+
+it('normalises a three-digit Hikvision confidence (tenths of a percent) to 0-1', function () {
+    $captures = (new AlertStreamParser)->push(multipart(alertXml(confidence: 920)));
+
+    expect($captures[0]->confidence)->toBe(0.92);
+});
+
+it('keeps tenths when the camera sends a three-digit confidence', function () {
+    $captures = (new AlertStreamParser)->push(multipart(alertXml(confidence: 985)));
+
+    expect($captures[0]->confidence)->toBe(0.985);
+});
 
 it('reads a plate out of one alert', function () {
     $captures = (new AlertStreamParser)->push(multipart(alertXml()));

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Invoice;
+use App\Support\DiskUsage;
 use App\Support\Platform\PlatformMetrics;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
@@ -38,6 +39,12 @@ new #[Title('Platform')] class extends Component {
             ->orderBy('period_start')
             ->limit(15)
             ->get();
+    }
+
+    #[Computed]
+    public function diskUsage(): DiskUsage
+    {
+        return DiskUsage::snapshot();
     }
 }; ?>
 
@@ -77,6 +84,27 @@ new #[Title('Platform')] class extends Component {
                 :value="$this->health['silent_cameras']"
                 :variant="$this->health['silent_cameras'] > 0 ? 'danger' : 'default'"
                 delta="Active but not reporting"
+            />
+        </div>
+    </x-panel>
+
+    <x-panel heading="Disk">
+        <div class="grid grid-cols-3 gap-3 max-sm:grid-cols-1" data-test="disk-usage">
+            <x-metric
+                label="Used"
+                :value="$this->diskUsage->usedLabel()"
+                :delta="$this->diskUsage->percentLabel().' of '.$this->diskUsage->totalLabel()"
+                :variant="$this->diskUsage->variant()"
+            />
+            <x-metric
+                label="Free"
+                :value="$this->diskUsage->freeLabel()"
+                :variant="$this->diskUsage->variant() === 'danger' ? 'danger' : 'default'"
+            />
+            <x-metric
+                label="Plate photos"
+                :value="$this->diskUsage->captureLabel()"
+                :delta="'Kept '.(int) config('trafficflow.webhook_capture_hours').' hours'"
             />
         </div>
     </x-panel>

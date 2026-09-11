@@ -10,6 +10,7 @@ use App\Support\Analytics\DateRange;
 use App\Support\Analytics\DayContextAnalytics;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\TrafficAnalytics;
+use App\Support\DiskUsage;
 use App\Support\Tenancy;
 use App\Support\Weather\CurrentWeather;
 use Illuminate\Support\Collection;
@@ -658,6 +659,21 @@ new #[Title('Dashboard')] class extends Component
     {
         return $this->canSeePlates();
     }
+
+    /**
+     * How full the volume behind plate JPEGs is. Owner-only — shops do
+     * not need infrastructure numbers, and the 15s poll is cheap because
+     * the capture-folder walk is cached.
+     */
+    #[Computed]
+    public function diskUsage(): ?DiskUsage
+    {
+        if (! auth()->user()?->isOwnerAdmin()) {
+            return null;
+        }
+
+        return DiskUsage::snapshot();
+    }
 }; ?>
 
 <div wire:poll.{{ $this->pollInterval }}>
@@ -704,6 +720,54 @@ new #[Title('Dashboard')] class extends Component
             />
         @endforeach
     </div>
+
+    @if ($this->diskUsage)
+        @php $disk = $this->diskUsage; @endphp
+        <div class="mb-6" data-test="disk-usage">
+            <x-panel-card>
+                <x-slot:header>
+                    <div class="flex items-center gap-3">
+                        <span @class([
+                            'flex size-9 items-center justify-center rounded-full',
+                            'bg-danger-soft text-danger' => $disk->variant() === 'danger',
+                            'bg-warning-soft text-warning' => $disk->variant() === 'warn',
+                            'bg-accent-soft text-accent' => $disk->variant() === 'default',
+                        ])>
+                            <flux:icon icon="circle-stack" class="size-4" />
+                        </span>
+                        <div>
+                            <p class="text-[13px] font-semibold text-ink">Disk</p>
+                            <p class="text-[11.5px] text-ink-muted">
+                                {{ $disk->usedLabel() }} used · {{ $disk->freeLabel() }} free of {{ $disk->totalLabel() }}
+                            </p>
+                        </div>
+                    </div>
+                    <span @class([
+                        'rounded-full px-3 py-1 text-[11px] font-semibold tabular-nums',
+                        'bg-danger-soft text-danger' => $disk->variant() === 'danger',
+                        'bg-warning-soft text-warning' => $disk->variant() === 'warn',
+                        'bg-surface-2 text-ink-2' => $disk->variant() === 'default',
+                    ])>{{ $disk->percentLabel() }} used</span>
+                </x-slot:header>
+
+                <div class="h-2 overflow-hidden rounded-full bg-surface-2">
+                    <div
+                        @class([
+                            'h-full rounded-full',
+                            'bg-danger' => $disk->variant() === 'danger',
+                            'bg-warning' => $disk->variant() === 'warn',
+                            'bg-accent' => $disk->variant() === 'default',
+                        ])
+                        style="width: {{ min(100, $disk->usedPercent) }}%"
+                    ></div>
+                </div>
+                <p class="mt-3 text-[12px] text-ink-muted">
+                    Plate photos {{ $disk->captureLabel() }}
+                    · kept {{ (int) config('trafficflow.webhook_capture_hours') }} hours
+                </p>
+            </x-panel-card>
+        </div>
+    @endif
 
     {{-- ── Charts row ───────────────────────────────────────────────────
          Today mode collapses the two-chart row into one wide "today vs

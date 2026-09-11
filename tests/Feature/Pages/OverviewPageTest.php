@@ -15,9 +15,23 @@ use App\Models\Visit;
 use App\Models\WatchlistPlate;
 use App\Support\Tenancy;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 
 beforeEach(function () {
+    // Sites ship with Pretoria coordinates, so the header weather pill
+    // would otherwise call Open-Meteo on every render. Windows/Laragon
+    // often lacks a CA bundle and the suite 500s on cURL error 60.
+    Http::fake([
+        '*api.open-meteo.com*' => Http::response([
+            'current' => [
+                'time' => '2026-09-11T09:00',
+                'temperature_2m' => 18.0,
+                'weather_code' => 1,
+            ],
+        ]),
+    ]);
+
     $this->owner = Organization::factory()->owner()->create();
     $this->site = Site::factory()->for_($this->owner)->create(['name' => 'Mall A']);
     $this->shop = Organization::factory()->shop($this->site)->create();
@@ -81,6 +95,21 @@ it('shows the security and watchlist cards to owners', function () {
     Livewire::test('pages::overview')
         ->assertSee('Security Alerts')
         ->assertSee('Recent Watchlist Hits');
+});
+
+it('shows disk usage to an owner', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    Livewire::test('pages::overview')
+        ->assertSee('Disk')
+        ->assertSee('Plate photos');
+});
+
+it('hides disk usage from shops', function () {
+    actingAsTenant(User::factory()->shopAdmin($this->shop)->create());
+
+    Livewire::test('pages::overview')
+        ->assertDontSee('Plate photos');
 });
 
 it('counts a watchlist hit as a new alert when the user has never visited security', function () {

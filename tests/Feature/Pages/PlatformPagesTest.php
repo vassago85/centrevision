@@ -46,6 +46,12 @@ it('shows revenue across every tenant', function () {
         ->assertSee('R5,174.00');
 });
 
+it('shows how full the storage volume is', function () {
+    Livewire::test('pages::platform.overview')
+        ->assertSee('Disk')
+        ->assertSee('Plate photos');
+});
+
 it('lists invoices that are still unpaid', function () {
     Invoice::factory()->for_($this->owner)->create([
         'amount' => 1800.00,

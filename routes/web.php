@@ -3,6 +3,7 @@
 use App\Http\Controllers\Billing\PaymentCallbackController;
 use App\Http\Controllers\Billing\PaystackWebhookController;
 use App\Http\Controllers\HikvisionWebhookController;
+use App\Http\Controllers\Platform\ImpersonationController;
 use App\Http\Controllers\PlateCaptureController;
 use App\Support\Navigation;
 use Illuminate\Support\Facades\Route;
@@ -91,7 +92,19 @@ Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
         Route::livewire('partners', 'pages::platform.partners')->name('partners');
         Route::livewire('approvals', 'pages::platform.approvals')->name('approvals');
         Route::livewire('settings', 'pages::platform.settings')->name('settings');
+
+        // Start viewing the app as a tenant. Restricted to platform admins
+        // by the surrounding role middleware; the controller re-checks.
+        Route::post('owners/{organization}/view-as', [ImpersonationController::class, 'start'])
+            ->name('impersonate.start');
     });
+
+    // Stop button in the impersonation banner. Deliberately outside the
+    // `role:platform_admin` group so the impersonated tenant (who is not a
+    // platform admin) can still hit it — the controller reads the session
+    // to know who to restore, so an unauthenticated POST is a no-op.
+    Route::post('platform/stop-viewing-as', [ImpersonationController::class, 'stop'])
+        ->name('platform.impersonate.stop');
 });
 
 require __DIR__.'/settings.php';

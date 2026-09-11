@@ -6,6 +6,7 @@ use App\Enums\InvoiceStatus;
 use App\Enums\OrganizationType;
 use App\Enums\PayoutStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\UserRole;
 use App\Models\Camera;
 use App\Models\Invoice;
 use App\Models\Organization;
@@ -16,8 +17,10 @@ use App\Models\Scopes\SiteScope;
 use App\Models\ShopSubscription;
 use App\Models\Site;
 use App\Models\SiteSubscription;
+use App\Models\User;
 use App\Models\Visit;
 use App\Support\Billing\BillingCalculator;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -106,8 +109,13 @@ class PlatformMetrics
      */
     public function ownerSummaries(): Collection
     {
-        return $this->owners()->map(function (Organization $owner): OwnerSummary {
+        $owners = $this->owners();
+        $latestLogins = $this->latestLoginsByOrganization($owners->modelKeys());
+        $ownerAdminOrgIds = $this->orgIdsWithOwnerAdmin($owners->modelKeys());
+
+        return $owners->map(function (Organization $owner) use ($latestLogins, $ownerAdminOrgIds): OwnerSummary {
             $charges = $this->calculator->chargesForOwner($owner);
+            $lastLoginRaw = $latestLogins->get($owner->getKey());
 
             return new OwnerSummary(
                 organization: $owner,
@@ -120,8 +128,56 @@ class PlatformMetrics
                 partner: $owner->referredByPartner,
                 isFree: $owner->isOnFreeBillingPlan(),
                 hasCustomPlan: $owner->hasCustomBillingPlan(),
+                lastLoginAt: $lastLoginRaw ? Carbon::parse($lastLoginRaw) : null,
+                canImpersonate: $ownerAdminOrgIds->contains($owner->getKey()),
             );
         })->sortByDesc(fn (OwnerSummary $summary) => $summary->totalToPlatform())->values();
+    }
+
+    /**
+     * Latest last_login_at per owner organization. Any user role counts —
+     * the platform admin cares whether the tenant is using the app at all,
+     * not which specific seat clocked in.
+     *
+     * @param  array<int, int>  $organizationIds
+     * @return Collection<int, string|null>
+     */
+    protected function latestLoginsByOrganization(array $organizationIds): Collection
+    {
+        if ($organizationIds === []) {
+            return collect();
+        }
+
+        return User::query()
+            ->whereIn('organization_id', $organizationIds)
+            ->whereNotNull('last_login_at')
+            ->toBase()
+            ->selectRaw('organization_id, MAX(last_login_at) AS last_login_at')
+            ->groupBy('organization_id')
+            ->pluck('last_login_at', 'organization_id');
+    }
+
+    /**
+     * Owner-admins are the only role a platform admin can safely impersonate:
+     * shops have no admin at all under the owner org, and security operators
+     * see a stripped tenant view that would confuse a "look at their
+     * dashboard" walkthrough.
+     *
+     * @param  array<int, int>  $organizationIds
+     * @return Collection<int, int>
+     */
+    protected function orgIdsWithOwnerAdmin(array $organizationIds): Collection
+    {
+        if ($organizationIds === []) {
+            return collect();
+        }
+
+        return User::query()
+            ->whereIn('organization_id', $organizationIds)
+            ->where('role', UserRole::OwnerAdmin)
+            ->pluck('organization_id')
+            ->unique()
+            ->values();
     }
 
     /**

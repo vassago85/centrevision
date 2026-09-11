@@ -28,6 +28,8 @@ use Spatie\Permission\Traits\HasRoles;
  * @property CarbonInterface|null $email_verified_at
  * @property CarbonInterface|null $alerts_last_seen_at
  * @property bool $alert_email_opt_in
+ * @property CarbonInterface|null $last_login_at
+ * @property string|null $last_login_ip
  * @property string $password
  * @property string|null $two_factor_secret
  * @property string|null $two_factor_recovery_codes
@@ -64,6 +66,7 @@ class User extends Authenticatable implements PasskeyUser
             'email_verified_at' => 'datetime',
             'alerts_last_seen_at' => 'datetime',
             'alert_email_opt_in' => 'boolean',
+            'last_login_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
         ];
@@ -74,9 +77,17 @@ class User extends Authenticatable implements PasskeyUser
      * Called from the Security page's mount hook — the dashboard bell shows
      * only events that happened after this timestamp, so opening /security
      * clears the badge until new events arrive.
+     *
+     * Silently skipped while a platform admin is impersonating this user, so
+     * an admin browsing "as" the tenant does not mask real alerts the tenant
+     * has not actually seen.
      */
     public function markAlertsSeen(): void
     {
+        if (app(\App\Support\Platform\Impersonation::class)->isActive()) {
+            return;
+        }
+
         $this->forceFill(['alerts_last_seen_at' => now()])->saveQuietly();
     }
 

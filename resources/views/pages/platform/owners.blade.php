@@ -373,6 +373,7 @@ new #[Title('Owners')] class extends Component {
                 'Owner',
                 'Partner',
                 'Plan',
+                'Last login',
                 ['label' => 'Sites', 'align' => 'right'],
                 ['label' => 'Cameras', 'align' => 'right'],
                 ['label' => 'Shops', 'align' => 'right'],
@@ -403,6 +404,21 @@ new #[Title('Owners')] class extends Component {
                             <span class="text-ink-muted">Standard</span>
                         @endif
                     </td>
+                    <td class="border-b border-line py-2" data-test="last-login-cell">
+                        @php $tone = $owner->loginTone(); @endphp
+                        <span
+                            @class([
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums',
+                                'bg-positive-soft text-positive' => $tone === 'positive',
+                                'bg-danger-soft text-danger' => $tone === 'danger',
+                                'bg-surface-2 text-ink-2' => $tone === 'default',
+                                'bg-surface-2 text-ink-muted' => $tone === 'muted',
+                            ])
+                            @if ($owner->lastLoginAt)
+                                title="{{ $owner->lastLoginAt->toDayDateTimeString() }}"
+                            @endif
+                        >{{ $owner->loginLabel() }}</span>
+                    </td>
                     <td class="border-b border-line py-2 text-right tabular-nums">{{ $owner->siteCount }}</td>
                     <td class="border-b border-line py-2 text-right tabular-nums">{{ $owner->cameraCount }}</td>
                     <td class="border-b border-line py-2 text-right tabular-nums">{{ $owner->payingShopCount }}</td>
@@ -416,9 +432,24 @@ new #[Title('Owners')] class extends Component {
                         R{{ number_format($owner->totalToPlatform(), 2) }}
                     </td>
                     <td class="border-b border-line py-2 text-right">
-                        <flux:button size="xs" variant="ghost" wire:click="openBilling({{ $owner->organization->id }})">
-                            Edit billing
-                        </flux:button>
+                        <div class="flex justify-end gap-2">
+                            @if ($owner->canImpersonate)
+                                <form
+                                    method="POST"
+                                    action="{{ route('platform.impersonate.start', $owner->organization) }}"
+                                    class="inline"
+                                    data-test="view-as-form-{{ $owner->organization->id }}"
+                                >
+                                    @csrf
+                                    <flux:button size="xs" variant="ghost" type="submit" icon="eye">
+                                        View as
+                                    </flux:button>
+                                </form>
+                            @endif
+                            <flux:button size="xs" variant="ghost" wire:click="openBilling({{ $owner->organization->id }})">
+                                Edit billing
+                            </flux:button>
+                        </div>
                     </td>
                 </tr>
             @endforeach

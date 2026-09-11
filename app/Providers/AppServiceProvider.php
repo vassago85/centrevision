@@ -7,12 +7,15 @@ use App\Http\Middleware\EnsureTenantContext;
 use App\Support\Billing\Gateway\FakePaymentGateway;
 use App\Support\Billing\Gateway\PaymentGateway;
 use App\Support\Billing\Gateway\PaystackGateway;
+use App\Support\Platform\Impersonation;
 use App\Support\Tenancy;
 use Carbon\CarbonImmutable;
+use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
@@ -27,6 +30,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(Tenancy::class);
+        $this->app->scoped(Impersonation::class);
 
         $this->registerPaymentGateway();
     }
@@ -62,6 +66,35 @@ class AppServiceProvider extends ServiceProvider
         $this->configureDefaults();
         $this->configureRateLimiting();
         $this->configureLivewire();
+        $this->configureLoginTracking();
+    }
+
+    /**
+     * Stamp every successful login so Platform → Owners can show a "Last
+     * login" pill per tenant. Skipped while a platform admin is
+     * impersonating an owner: the real admin's `Auth::login` fires this
+     * event, but the follow-up Auth::login for the impersonated target
+     * would otherwise wipe the tenant's genuine timestamp with the admin's
+     * click.
+     */
+    protected function configureLoginTracking(): void
+    {
+        Event::listen(function (Login $event): void {
+            if (app(Impersonation::class)->isActive()) {
+                return;
+            }
+
+            $user = $event->user;
+
+            if (! method_exists($user, 'forceFill')) {
+                return;
+            }
+
+            $user->forceFill([
+                'last_login_at' => now(),
+                'last_login_ip' => request()->ip(),
+            ])->saveQuietly();
+        });
     }
 
     /**

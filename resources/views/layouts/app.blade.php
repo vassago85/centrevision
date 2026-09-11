@@ -13,6 +13,7 @@
 
         <main class="lg:pl-[264px]">
             <div class="mx-auto max-w-[1200px] px-5 pt-6 pb-16 sm:px-8">
+                <x-impersonation-banner />
                 <x-subscription-banner />
 
                 {{ $slot }}

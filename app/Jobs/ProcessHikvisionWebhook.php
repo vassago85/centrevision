@@ -24,10 +24,10 @@ class ProcessHikvisionWebhook implements ShouldQueue
 {
     use Queueable;
 
-    /** Attachments are stored under this directory on the local disk. */
+    /** Plate/vehicle JPEGs. PruneWebhookStaging deletes them after a day. */
     public const CAPTURES_DIR = 'plate-captures';
 
-    /** Unparseable bodies move here so they are not retried forever. */
+    /** Leftover unparseable bodies from when we used to quarantine them. */
     public const QUARANTINE_DIR = 'hikvision-webhook-quarantine';
 
     /**
@@ -85,13 +85,9 @@ class ProcessHikvisionWebhook implements ShouldQueue
         $event = $parser->parse($body, $this->contentType);
 
         if ($event === null) {
-            // Motion / video-loss / tamper alerts are valid Hikvision XML
-            // but not plates. A busy site with HTTP Listening ticked on
-            // those rules would otherwise park a JPEG-bearing body in
-            // quarantine on every motion tick and never delete it.
-            if ($this->isKnownNonAnprAlert($body)) {
-                $disk->delete($this->inboxKey);
+            $disk->delete($this->inboxKey);
 
+            if ($this->isKnownNonAnprAlert($body)) {
                 Log::info('Discarded non-ANPR Hikvision webhook', [
                     'camera_id' => $this->cameraId,
                     'content_type' => $this->contentType,
@@ -100,15 +96,6 @@ class ProcessHikvisionWebhook implements ShouldQueue
 
                 return;
             }
-
-            // Unparseable payloads are quarantined next to the inbox so we
-            // can inspect what the camera actually sent without leaving them
-            // to be reprocessed forever. PruneWebhookStaging expires them.
-            $quarantineKey = self::QUARANTINE_DIR.'/'
-                .$this->cameraId.'/'
-                .basename($this->inboxKey);
-
-            $disk->move($this->inboxKey, $quarantineKey);
 
             // Do not log the request body: the XML contains the plate string,
             // which is personal data under POPIA.
@@ -131,9 +118,9 @@ class ProcessHikvisionWebhook implements ShouldQueue
     }
 
     /**
-     * Save the plate crop and vehicle snapshots alongside the event they
-     * belong to, using a directory scheme that keeps retention pruning
-     * predictable ({camera}/{year}/{month}/{day}/).
+     * Save the plate crop and vehicle snapshots next to the event. They
+     * live under {camera}/{year}/{month}/{day}/ so a one-day prune can
+     * drop a whole folder without walking every remaining event.
      *
      * @param  list<HikvisionAttachment>  $attachments
      */
@@ -141,7 +128,6 @@ class ProcessHikvisionWebhook implements ShouldQueue
     {
         $disk = Storage::disk('local');
         $day = now()->format('Y/m/d');
-
         $maxAttachmentBytes = (int) config('trafficflow.webhook_max_attachment_bytes');
 
         foreach ($attachments as $index => $attachment) {
@@ -161,7 +147,7 @@ class ProcessHikvisionWebhook implements ShouldQueue
     /**
      * True when the body is a Hikvision EventNotificationAlert that is not
      * a plate read (VMD, videoloss, linedetection, heartbeats with XML).
-     * Garbage we do not recognise stays false so it is still quarantined.
+     * Garbage we do not recognise stays false so it is logged and deleted.
      */
     protected function isKnownNonAnprAlert(string $body): bool
     {
@@ -177,22 +163,16 @@ class ProcessHikvisionWebhook implements ShouldQueue
     }
 
     /**
-     * On terminal failure (all retries exhausted), quarantine so an operator
-     * can review. We still return cleanly rather than throwing so the queue
-     * does not hold the payload against retention limits.
+     * On terminal failure, drop the staged body. The camera already got 200;
+     * we do not keep the payload on disk.
      */
     public function failed(\Throwable $exception): void
     {
         $disk = Storage::disk('local');
 
-        if (! $disk->exists($this->inboxKey)) {
-            return;
+        if ($disk->exists($this->inboxKey)) {
+            $disk->delete($this->inboxKey);
         }
-
-        $disk->move(
-            $this->inboxKey,
-            self::QUARANTINE_DIR.'/'.$this->cameraId.'/'.basename($this->inboxKey),
-        );
 
         Log::error('Hikvision webhook job failed after retries', [
             'camera_id' => $this->cameraId,

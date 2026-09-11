@@ -46,14 +46,12 @@ return [
     // a mis-linked motion clip or a full-frame dump we will not keep.
     'webhook_max_bytes' => (int) env('TRAFFICFLOW_WEBHOOK_MAX_BYTES', 8 * 1024 * 1024),
 
-    // Skip individual attached images larger than this when recording a
-    // valid plate event (full-scene JPEGs).
+    // Skip individual attached images larger than this (full-scene dumps).
     'webhook_max_attachment_bytes' => (int) env('TRAFFICFLOW_WEBHOOK_MAX_ATTACHMENT_BYTES', 1_500_000),
 
-    // Unparseable payloads stay in quarantine this long for diagnosis, then
-    // go. Known non-ANPR alerts (VMD, video-loss) are discarded immediately
-    // and never land here.
-    'webhook_quarantine_days' => (int) env('TRAFFICFLOW_WEBHOOK_QUARANTINE_DAYS', 7),
+    // How long plate/vehicle JPEGs stay on disk. The database row is the
+    // durable record; snapshots are only kept for a day.
+    'webhook_capture_hours' => (int) env('TRAFFICFLOW_WEBHOOK_CAPTURE_HOURS', 24),
 
     // Inbox files older than this mean the queue worker is stuck. Drop them
     // so a backlog cannot fill the volume. The camera already got a 200.

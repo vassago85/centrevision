@@ -67,17 +67,15 @@ it('reads an xml dropped without an image', function () {
     expect(PlateEvent::query()->sole()->plate_number)->toBe('BX91GP');
 });
 
-it('archives the capture and its sidecar so the next sweep skips them', function () {
+it('deletes the capture and its sidecar so the next sweep skips them', function () {
     dropFile('capture-003.jpg');
     dropFile('capture-003.xml', alertXml('JD45GP'));
 
     SweepFtpDropFolder::dispatchSync();
 
-    $archive = $this->cameraDir.DIRECTORY_SEPARATOR.'processed';
-
-    expect(File::exists($archive.DIRECTORY_SEPARATOR.'capture-003.jpg'))->toBeTrue()
-        ->and(File::exists($archive.DIRECTORY_SEPARATOR.'capture-003.xml'))->toBeTrue()
-        ->and(File::files($this->cameraDir))->toHaveCount(0);
+    expect(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'capture-003.jpg'))->toBeFalse()
+        ->and(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'capture-003.xml'))->toBeFalse()
+        ->and(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'processed'))->toBeFalse();
 
     SweepFtpDropFolder::dispatchSync();
 
@@ -100,14 +98,14 @@ it('does not duplicate a capture the alert stream already recorded', function ()
     expect(PlateEvent::query()->count())->toBe(1);
 });
 
-it('quarantines files it cannot parse instead of retrying them forever', function () {
+it('deletes files it cannot parse instead of retrying them forever', function () {
     dropFile('not-a-capture.jpg');
 
     SweepFtpDropFolder::dispatchSync();
 
     expect(PlateEvent::query()->count())->toBe(0)
         ->and(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'not-a-capture.jpg'))->toBeFalse()
-        ->and(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'failed'.DIRECTORY_SEPARATOR.'not-a-capture.jpg'))->toBeTrue();
+        ->and(File::exists($this->cameraDir.DIRECTORY_SEPARATOR.'failed'))->toBeFalse();
 });
 
 it('ignores files that are not captures', function () {

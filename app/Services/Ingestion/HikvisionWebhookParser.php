@@ -11,7 +11,7 @@ use App\Services\Isapi\AlertStreamParser;
  * The camera posts one of two shapes:
  *
  *  - multipart/form-data, with one text part carrying the alert XML and 0-3
- *    image parts (plate crop, vehicle snapshot, occasional full frame)
+ *    image parts (kept on disk for one day, then pruned)
  *  - application/xml (or text/xml), with the alert XML as the whole body
  *
  * The XML itself is the same EventNotificationAlert document the ISAPI alert

@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Reliability fallback for the alert stream: sweeps the folder cameras FTP
- * their captures into, records anything new, and archives what it processed.
+ * their captures into, records the plate in the database, then deletes the
+ * file. We do not keep the camera's JPEGs.
  *
  * Captures already recorded by the stream are dropped by the recorder's dedupe,
  * so running both paths at once is safe.
@@ -77,10 +78,6 @@ class SweepFtpDropFolder implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $archive = $directory.DIRECTORY_SEPARATOR.'processed';
-        $quarantine = $directory.DIRECTORY_SEPARATOR.'failed';
-        File::ensureDirectoryExists($archive);
-
         foreach (File::files($directory) as $file) {
             $extension = strtolower($file->getExtension());
 
@@ -94,13 +91,13 @@ class SweepFtpDropFolder implements ShouldBeUnique, ShouldQueue
                 continue;
             }
 
-            // Archiving an image also moves its sidecar, which may already have
-            // been listed for this pass.
+            // Deleting an image also removes its sidecar, which may already
+            // have been listed for this pass.
             if (! File::exists($file->getPathname())) {
                 continue;
             }
 
-            $this->processFile($camera, $file->getPathname(), $archive, $quarantine, $recorder, $parser);
+            $this->processFile($camera, $file->getPathname(), $recorder, $parser);
         }
     }
 
@@ -115,7 +112,7 @@ class SweepFtpDropFolder implements ShouldBeUnique, ShouldQueue
         return false;
     }
 
-    protected function processFile(Camera $camera, string $path, string $archive, string $quarantine, PlateEventRecorder $recorder, DropFileParser $parser): void
+    protected function processFile(Camera $camera, string $path, PlateEventRecorder $recorder, DropFileParser $parser): void
     {
         $filename = basename($path);
 
@@ -131,19 +128,11 @@ class SweepFtpDropFolder implements ShouldBeUnique, ShouldQueue
             $capture = null;
         }
 
-        // Quarantine rather than archive, so an operator can see what the
-        // camera is producing instead of it silently vanishing, and so the
-        // next sweep does not reconsider it forever.
-        if ($capture === null) {
-            File::ensureDirectoryExists($quarantine);
-            $this->move($path, $quarantine);
-
-            return;
+        if ($capture !== null) {
+            $recorder->record($camera, $capture);
         }
 
-        $recorder->record($camera, $capture);
-
-        $this->move($path, $archive);
+        $this->forget($path);
     }
 
     protected function sidecarFor(string $path): ?string
@@ -159,16 +148,16 @@ class SweepFtpDropFolder implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Move the capture and any sidecar out of the way so the next sweep does
-     * not reconsider them.
+     * Delete the capture and any sidecar so the next sweep does not
+     * reconsider them and so the camera's files do not accumulate.
      */
-    protected function move(string $path, string $destination): void
+    protected function forget(string $path): void
     {
         $stem = pathinfo($path, PATHINFO_FILENAME);
         $directory = dirname($path);
 
         foreach (File::glob($directory.DIRECTORY_SEPARATOR.$stem.'.*') as $related) {
-            File::move($related, $destination.DIRECTORY_SEPARATOR.basename($related));
+            File::delete($related);
         }
     }
 }

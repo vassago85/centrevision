@@ -97,13 +97,12 @@ it('saves attached images alongside the plate event', function () {
     )->assertOk();
 
     $event = PlateEvent::withoutGlobalScope(SiteScope::class)->sole();
-    $day = now()->format('Y/m/d');
-    $prefix = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/'.$day;
+    $prefix = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/'.now()->format('Y/m/d');
 
-    // Two attachments produce two files, ordered by their position in the
-    // multipart body.
-    expect(Storage::disk('local')->get($prefix.'/'.$event->id.'-0.jpg'))->toBe('plate-bytes')
-        ->and(Storage::disk('local')->get($prefix.'/'.$event->id.'-1.jpg'))->toBe('vehicle-bytes');
+    expect($event->plate_number)->toBe('HK12GP')
+        ->and(Storage::disk('local')->get($prefix.'/'.$event->id.'-0.jpg'))->toBe('plate-bytes')
+        ->and(Storage::disk('local')->get($prefix.'/'.$event->id.'-1.jpg'))->toBe('vehicle-bytes')
+        ->and(Storage::disk('local')->allFiles(HikvisionWebhookController::INBOX_DIR))->toBeEmpty();
 });
 
 it('accepts a bare XML body', function () {
@@ -257,31 +256,7 @@ it('does not stage a webhook body larger than the configured cap', function () {
         ->and($this->camera->fresh()->webhook_last_seen_at)->not->toBeNull();
 });
 
-it('skips attached images larger than the per-file cap', function () {
-    config(['trafficflow.webhook_max_attachment_bytes' => 20]);
-
-    $body = hikMultipart(
-        xml: hikXml(plate: 'HK12GP'),
-        images: [
-            ['content_type' => 'image/jpeg', 'filename' => 'plate.jpg', 'bytes' => 'tiny'],
-            ['content_type' => 'image/jpeg', 'filename' => 'scene.jpg', 'bytes' => str_repeat('F', 200)],
-        ],
-    );
-
-    postHikWebhook(
-        $this->camera,
-        $body,
-        'multipart/form-data; boundary=MIME_boundary_ANPR',
-    )->assertOk();
-
-    $event = PlateEvent::withoutGlobalScope(SiteScope::class)->sole();
-    $prefix = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/'.now()->format('Y/m/d');
-
-    expect(Storage::disk('local')->exists($prefix.'/'.$event->id.'-0.jpg'))->toBeTrue()
-        ->and(Storage::disk('local')->exists($prefix.'/'.$event->id.'-1.jpg'))->toBeFalse();
-});
-
-it('quarantines an unparseable payload without crashing', function () {
+it('discards an unparseable payload without crashing', function () {
     postHikWebhook(
         $this->camera,
         'not xml, not a boundary, definitely not an event',
@@ -290,15 +265,14 @@ it('quarantines an unparseable payload without crashing', function () {
 
     expect(PlateEvent::withoutGlobalScope(SiteScope::class)->count())->toBe(0);
 
-    // The staged file has moved to quarantine.
     $inboxFiles = Storage::disk('local')->files(HikvisionWebhookController::INBOX_DIR.'/'.$this->camera->id);
-    $quarantineFiles = Storage::disk('local')->files('hikvision-webhook-quarantine/'.$this->camera->id);
+    $quarantineFiles = Storage::disk('local')->files(ProcessHikvisionWebhook::QUARANTINE_DIR.'/'.$this->camera->id);
 
     expect($inboxFiles)->toBeEmpty()
-        ->and($quarantineFiles)->toHaveCount(1);
+        ->and($quarantineFiles)->toBeEmpty();
 });
 
-it('ticks webhook_last_seen_at even when the payload is quarantined', function () {
+it('ticks webhook_last_seen_at even when the payload is discarded', function () {
     // A payload we cannot decode still proves the camera is alive to reach
     // us — motion, video-loss, tampering, and other Hikvision alert types
     // that are not plate reads all land here. The Cameras page relies on

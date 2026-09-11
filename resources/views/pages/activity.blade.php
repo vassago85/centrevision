@@ -3,7 +3,9 @@
 use App\Enums\PlateDirection;
 use App\Enums\WatchlistKind;
 use App\Models\Camera;
+use App\Models\PlateEvent;
 use App\Models\WatchlistPlate;
+use App\Support\Ingestion\PlateCaptureStore;
 use App\Support\Analytics\PlateActivityLog;
 use App\Support\Analytics\SecurityLogExporter;
 use App\Support\PlateNumber;
@@ -37,6 +39,9 @@ new #[Title('Activity')] class extends Component
     /** Plate search — substring match on the normalised form. */
     #[Url(as: 'plate', keep: true)]
     public string $plateSearch = '';
+
+    /** Event whose day-old snapshots are open in the photo modal. */
+    public ?int $viewingCaptureEventId = null;
 
     public function mount(): void
     {
@@ -129,6 +134,60 @@ new #[Title('Activity')] class extends Component
             $this->plateSearch === '' ? null : $this->plateSearch,
             perPage: 50,
         );
+    }
+
+    /**
+     * How many snapshots are still on disk for each event on the current
+     * page. Events older than a day (or never sent a JPEG) are omitted.
+     *
+     * @return array<int, int>
+     */
+    #[Computed]
+    public function captureCounts(): array
+    {
+        $store = app(PlateCaptureStore::class);
+
+        return $this->events->getCollection()
+            ->mapWithKeys(fn (PlateEvent $event) => [$event->id => count($store->pathsFor($event))])
+            ->filter(fn (int $count) => $count > 0)
+            ->all();
+    }
+
+    /**
+     * @return list<string>
+     */
+    #[Computed]
+    public function viewingCaptureUrls(): array
+    {
+        if ($this->viewingCaptureEventId === null) {
+            return [];
+        }
+
+        $event = PlateEvent::query()->with('camera')->find($this->viewingCaptureEventId);
+
+        if ($event === null || auth()->user()?->cannot('view', $event)) {
+            return [];
+        }
+
+        $count = count(app(PlateCaptureStore::class)->pathsFor($event));
+
+        if ($count === 0) {
+            return [];
+        }
+
+        return collect(range(0, $count - 1))
+            ->map(fn (int $index) => route('activity.captures.show', [$event, $index]))
+            ->all();
+    }
+
+    public function viewCaptures(int $eventId): void
+    {
+        $this->viewingCaptureEventId = $eventId;
+    }
+
+    public function closeCaptures(): void
+    {
+        $this->viewingCaptureEventId = null;
     }
 
     #[Computed]
@@ -409,13 +468,24 @@ new #[Title('Activity')] class extends Component
                         @endif
                     </td>
                     <td class="border-b border-line py-2 text-right">
-                        @if ($this->focusedPlate === null)
-                            <flux:button
-                                size="xs"
-                                variant="ghost"
-                                wire:click="focusOnPlate('{{ $event->plate_number }}')"
-                            >History</flux:button>
-                        @endif
+                        <div class="flex items-center justify-end gap-1">
+                            @if (($this->captureCounts[$event->id] ?? 0) > 0)
+                                <flux:button
+                                    size="xs"
+                                    variant="ghost"
+                                    icon="photo"
+                                    wire:click="viewCaptures({{ $event->id }})"
+                                    data-test="view-captures-{{ $event->id }}"
+                                >Photos</flux:button>
+                            @endif
+                            @if ($this->focusedPlate === null)
+                                <flux:button
+                                    size="xs"
+                                    variant="ghost"
+                                    wire:click="focusOnPlate('{{ $event->plate_number }}')"
+                                >History</flux:button>
+                            @endif
+                        </div>
                     </td>
                 </tr>
             @endforeach
@@ -427,4 +497,18 @@ new #[Title('Activity')] class extends Component
             </div>
         @endif
     </x-panel>
+
+    <flux:modal wire:model.self="viewingCaptureEventId" class="md:w-[40rem]" @close="$wire.closeCaptures()">
+        <div class="space-y-3">
+            <flux:heading size="lg">{{ __('Camera photos') }}</flux:heading>
+            <flux:text class="text-ink-2">
+                {{ __('Kept for 24 hours, then deleted. The plate record stays in the database.') }}
+            </flux:text>
+            @forelse ($this->viewingCaptureUrls as $url)
+                <img src="{{ $url }}" alt="" class="w-full rounded-lg border border-line bg-surface-2" />
+            @empty
+                <p class="text-[13px] text-ink-muted">{{ __('These photos have already been removed.') }}</p>
+            @endforelse
+        </div>
+    </flux:modal>
 </div>

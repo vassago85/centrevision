@@ -10,15 +10,24 @@ beforeEach(function () {
     Storage::fake('local');
 });
 
-it('deletes quarantine files older than the diagnosis window', function () {
+it('wipes leftover quarantine files', function () {
+    $quarantine = ProcessHikvisionWebhook::QUARANTINE_DIR.'/12/old.bin';
+    Storage::disk('local')->put($quarantine, 'unparseable');
+
+    PruneWebhookStaging::dispatchSync();
+
+    expect(Storage::disk('local')->exists($quarantine))->toBeFalse();
+});
+
+it('deletes plate-capture JPEGs older than a day and keeps newer ones', function () {
     Date::setTestNow('2026-09-11 10:00:00');
 
-    $stale = ProcessHikvisionWebhook::QUARANTINE_DIR.'/12/old.bin';
-    $fresh = ProcessHikvisionWebhook::QUARANTINE_DIR.'/12/new.bin';
+    $stale = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/10/99-0.jpg';
+    $fresh = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/11/100-0.jpg';
 
-    Storage::disk('local')->put($stale, 'unparseable');
-    Storage::disk('local')->put($fresh, 'unparseable');
-    touch(Storage::disk('local')->path($stale), now()->subDays(10)->timestamp);
+    Storage::disk('local')->put($stale, 'old-jpeg');
+    Storage::disk('local')->put($fresh, 'new-jpeg');
+    touch(Storage::disk('local')->path($stale), now()->subHours(25)->timestamp);
 
     PruneWebhookStaging::dispatchSync();
 

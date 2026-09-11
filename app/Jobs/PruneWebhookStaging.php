@@ -12,12 +12,12 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Drop stale webhook staging files so a busy or mis-linked camera cannot
- * fill the storage volume.
+ * Drop stale webhook staging files and day-old camera JPEGs so a busy
+ * site cannot fill the storage volume.
  *
  * Inbox files should vanish in seconds once the worker parses them.
- * Quarantine holds genuinely unparseable bodies for a short diagnosis
- * window. Anything older than the configured TTL is gone.
+ * Plate-capture JPEGs are kept for one day. Leftover quarantine from
+ * earlier builds is wiped outright.
  */
 class PruneWebhookStaging implements ShouldBeUnique, ShouldQueue
 {
@@ -40,19 +40,25 @@ class PruneWebhookStaging implements ShouldBeUnique, ShouldQueue
             now()->subHours((int) config('trafficflow.webhook_inbox_max_hours')),
         );
 
-        $quarantineDeleted = $this->pruneOlderThan(
+        $quarantineDeleted = $this->deleteDirectory(
             $disk,
             ProcessHikvisionWebhook::QUARANTINE_DIR,
-            now()->subDays((int) config('trafficflow.webhook_quarantine_days')),
         );
 
-        if ($inboxDeleted === 0 && $quarantineDeleted === 0) {
+        $capturesDeleted = $this->pruneOlderThan(
+            $disk,
+            ProcessHikvisionWebhook::CAPTURES_DIR,
+            now()->subHours((int) config('trafficflow.webhook_capture_hours')),
+        );
+
+        if ($inboxDeleted === 0 && $quarantineDeleted === 0 && $capturesDeleted === 0) {
             return;
         }
 
         Log::info('Pruned stale Hikvision webhook staging files', [
             'inbox_deleted' => $inboxDeleted,
             'quarantine_deleted' => $quarantineDeleted,
+            'captures_deleted' => $capturesDeleted,
         ]);
     }
 
@@ -73,6 +79,18 @@ class PruneWebhookStaging implements ShouldBeUnique, ShouldQueue
             $disk->delete($path);
             $deleted++;
         }
+
+        return $deleted;
+    }
+
+    protected function deleteDirectory(Filesystem $disk, string $directory): int
+    {
+        if (! $disk->exists($directory)) {
+            return 0;
+        }
+
+        $deleted = count($disk->allFiles($directory));
+        $disk->deleteDirectory($directory);
 
         return $deleted;
     }

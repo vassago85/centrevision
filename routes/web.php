@@ -3,6 +3,7 @@
 use App\Http\Controllers\Billing\PaymentCallbackController;
 use App\Http\Controllers\Billing\PaystackWebhookController;
 use App\Http\Controllers\HikvisionWebhookController;
+use App\Http\Controllers\PlateCaptureController;
 use App\Support\Navigation;
 use Illuminate\Support\Facades\Route;
 
@@ -66,6 +67,10 @@ Route::middleware(['auth', 'verified', 'tenant'])->group(function () {
             Route::livewire('cameras', 'pages::cameras')->name('cameras');
             Route::livewire('activity', 'pages::activity')->name('activity');
             Route::livewire('activity/plates/{plate}', 'pages::vehicle')->name('vehicle');
+            Route::get('activity/captures/{event}/{index}', PlateCaptureController::class)
+                ->whereNumber('event')
+                ->whereNumber('index')
+                ->name('activity.captures.show');
             Route::livewire('security', 'pages::security')->name('security');
             Route::livewire('watchlist', 'pages::watchlist')->name('watchlist');
         });

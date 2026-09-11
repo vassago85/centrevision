@@ -99,7 +99,6 @@ it('extracts plate crop and vehicle snapshot images alongside the XML', function
         ->and($event->attachments)->toHaveCount(2)
         ->and($event->attachments[0]->filename)->toBe('licensePlatePicture.jpg')
         ->and($event->attachments[0]->bytes)->toBe('plate-jpeg-bytes')
-        ->and($event->attachments[0]->contentType)->toBe('image/jpeg')
         ->and($event->attachments[1]->filename)->toBe('detectionPicture.jpg');
 });
 

@@ -41,6 +41,24 @@ return [
     // A camera silent for longer than this shows as unreachable.
     'camera_stale_after_minutes' => 30,
 
+    // Hard cap on a single webhook body written to disk. A plate crop plus
+    // vehicle JPEG is typically well under 1 MB; anything near this limit is
+    // a mis-linked motion clip or a full-frame dump we will not keep.
+    'webhook_max_bytes' => (int) env('TRAFFICFLOW_WEBHOOK_MAX_BYTES', 8 * 1024 * 1024),
+
+    // Skip individual attached images larger than this when recording a
+    // valid plate event (full-scene JPEGs).
+    'webhook_max_attachment_bytes' => (int) env('TRAFFICFLOW_WEBHOOK_MAX_ATTACHMENT_BYTES', 1_500_000),
+
+    // Unparseable payloads stay in quarantine this long for diagnosis, then
+    // go. Known non-ANPR alerts (VMD, video-loss) are discarded immediately
+    // and never land here.
+    'webhook_quarantine_days' => (int) env('TRAFFICFLOW_WEBHOOK_QUARANTINE_DAYS', 7),
+
+    // Inbox files older than this mean the queue worker is stuck. Drop them
+    // so a backlog cannot fill the volume. The camera already got a 200.
+    'webhook_inbox_max_hours' => (int) env('TRAFFICFLOW_WEBHOOK_INBOX_MAX_HOURS', 24),
+
     /*
     |--------------------------------------------------------------------------
     | Visit matching

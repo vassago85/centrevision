@@ -1,11 +1,13 @@
 <?php
 
+use App\Jobs\ProcessHikvisionWebhook;
 use App\Jobs\PrunePlateData;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Site;
 use App\Models\SiteDayStat;
 use App\Models\Visit;
+use Illuminate\Support\Facades\Storage;
 
 beforeEach(function () {
     $this->site = Site::factory()->create();
@@ -105,6 +107,23 @@ it('deletes in batches without missing rows', function () {
     PrunePlateData::dispatchSync();
 
     expect(Visit::query()->count())->toBe(0);
+});
+
+it('deletes plate-capture files whose day folder is past retention', function () {
+    Storage::fake('local');
+
+    $this->site->update(['settings' => ['retention_days' => 30]]);
+
+    $stale = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/2026/01/01/99-0.jpg';
+    $fresh = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/'.now()->format('Y/m/d').'/100-0.jpg';
+
+    Storage::disk('local')->put($stale, 'old-jpeg');
+    Storage::disk('local')->put($fresh, 'new-jpeg');
+
+    PrunePlateData::dispatchSync();
+
+    expect(Storage::disk('local')->exists($stale))->toBeFalse()
+        ->and(Storage::disk('local')->exists($fresh))->toBeTrue();
 });
 
 it('leaves site_day_stats rollups alone even when they predate retention', function () {

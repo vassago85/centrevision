@@ -63,6 +63,23 @@ class HikvisionWebhookController
             return response('', 200);
         }
 
+        $maxBytes = (int) config('trafficflow.webhook_max_bytes');
+
+        if ($maxBytes > 0 && strlen($body) > $maxBytes) {
+            // Answer 200 so Hikvision does not self-disable HTTP Listening.
+            // Do not stage the body — a single oversized dump (motion clip,
+            // full-frame burst) must not land on the volume.
+            $camera->forceFill(['webhook_last_seen_at' => now()])->saveQuietly();
+
+            Log::warning('Hikvision webhook rejected: payload too large', [
+                'camera_id' => $camera->getKey(),
+                'bytes' => strlen($body),
+                'max_bytes' => $maxBytes,
+            ]);
+
+            return response('', 200);
+        }
+
         $inboxKey = self::INBOX_DIR.'/'.$camera->getKey().'/'.Str::ulid().'.bin';
 
         Storage::disk('local')->put($inboxKey, $body);

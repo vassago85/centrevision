@@ -113,15 +113,32 @@
 </aside>
 
 {{-- Mobile fallback: on <lg, the sidebar collapses to a strip along the top so
-     users on small screens still get the same nav items without a hamburger. --}}
-<div class="mb-4 flex items-center gap-3 border-b border-line bg-canvas px-4 py-3 lg:hidden">
+     users on small screens still get the same nav items without a hamburger.
+     Account links and Log out live in this menu too — the desktop user card
+     is `max-lg:hidden`, so without them here there is no way to sign out. --}}
+<div class="mb-4 flex items-center gap-3 border-b border-line bg-canvas px-4 py-3 lg:hidden" data-test="mobile-nav">
     <x-brand variant="wordmark" class="flex-1" />
     <flux:dropdown position="bottom" align="end">
-        <flux:button size="sm" variant="ghost" icon="bars-3" square />
+        <flux:button size="sm" variant="ghost" icon="bars-3" square aria-label="{{ __('Menu') }}" />
         <flux:menu>
             @foreach ($items as $item)
                 <flux:menu.item :href="route($item['route'])" wire:navigate :icon="$item['icon']">{{ $item['label'] }}</flux:menu.item>
             @endforeach
+            <flux:menu.separator />
+            <flux:menu.item :href="route('account.profile')" icon="user" wire:navigate>{{ __('Profile') }}</flux:menu.item>
+            <flux:menu.item :href="route('account.appearance')" icon="swatch" wire:navigate>{{ __('Appearance') }}</flux:menu.item>
+            <flux:menu.item :href="route('account.security')" icon="shield-check" wire:navigate>{{ __('Account security') }}</flux:menu.item>
+            <flux:menu.separator />
+            <form method="POST" action="{{ route('logout') }}" class="w-full">
+                @csrf
+                <flux:menu.item
+                    as="button"
+                    type="submit"
+                    icon="arrow-right-start-on-rectangle"
+                    class="w-full cursor-pointer"
+                    data-test="mobile-logout-button"
+                >{{ __('Log out') }}</flux:menu.item>
+            </form>
         </flux:menu>
     </flux:dropdown>
 </div>

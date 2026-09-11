@@ -8,10 +8,12 @@ use App\Models\Scopes\SiteScope;
 use App\Models\Site;
 use App\Models\Visit;
 use Carbon\CarbonInterface;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * POPIA retention: plate numbers are personal data, so events and visits are
@@ -45,8 +47,9 @@ class PrunePlateData implements ShouldBeUnique, ShouldQueue
 
             $visits = $this->pruneVisits($site, $cutoff);
             $events = $this->pruneEvents($site, $cutoff);
+            $captures = $this->pruneCaptures($site, $cutoff);
 
-            if ($visits === 0 && $events === 0) {
+            if ($visits === 0 && $events === 0 && $captures === 0) {
                 continue;
             }
 
@@ -55,6 +58,7 @@ class PrunePlateData implements ShouldBeUnique, ShouldQueue
                 'cutoff' => $cutoff->toDateString(),
                 'visits_deleted' => $visits,
                 'events_deleted' => $events,
+                'capture_files_deleted' => $captures,
             ]);
         }
     }
@@ -138,5 +142,77 @@ class PrunePlateData implements ShouldBeUnique, ShouldQueue
         } while ($batch->count() === self::BATCH);
 
         return $deleted;
+    }
+
+    /**
+     * Capture JPEGs live under plate-captures/{camera}/{Y}/{m}/{d}/ so a
+     * day folder older than the cutoff can be removed without walking
+     * every remaining event. The date in the path is the process day,
+     * which tracks captured_at closely enough for retention.
+     */
+    protected function pruneCaptures(Site $site, CarbonInterface $cutoff): int
+    {
+        $cameraIds = Camera::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->where('site_id', $site->getKey())
+            ->pluck('id');
+
+        if ($cameraIds->isEmpty()) {
+            return 0;
+        }
+
+        $disk = Storage::disk('local');
+        $cutoffDate = $cutoff->toDateString();
+        $deleted = 0;
+
+        foreach ($cameraIds as $cameraId) {
+            $root = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$cameraId;
+
+            if (! $disk->exists($root)) {
+                continue;
+            }
+
+            foreach ($this->datedCaptureDirectories($disk, $root) as $directory => $date) {
+                if ($date >= $cutoffDate) {
+                    continue;
+                }
+
+                $deleted += count($disk->allFiles($directory));
+                $disk->deleteDirectory($directory);
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * @return array<string, string> directory path => Y-m-d
+     */
+    protected function datedCaptureDirectories(Filesystem $disk, string $root): array
+    {
+        $dated = [];
+
+        foreach ($disk->directories($root) as $yearDir) {
+            foreach ($disk->directories($yearDir) as $monthDir) {
+                foreach ($disk->directories($monthDir) as $dayDir) {
+                    $parts = explode('/', str_replace('\\', '/', $dayDir));
+                    $day = $parts[array_key_last($parts)] ?? null;
+                    $month = $parts[array_key_last($parts) - 1] ?? null;
+                    $year = $parts[array_key_last($parts) - 2] ?? null;
+
+                    if ($year === null || $month === null || $day === null) {
+                        continue;
+                    }
+
+                    if (! preg_match('/^\d{4}$/', $year) || ! preg_match('/^\d{2}$/', $month) || ! preg_match('/^\d{2}$/', $day)) {
+                        continue;
+                    }
+
+                    $dated[$dayDir] = $year.'-'.$month.'-'.$day;
+                }
+            }
+        }
+
+        return $dated;
     }
 }

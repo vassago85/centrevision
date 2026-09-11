@@ -57,6 +57,18 @@ it('sends guests to the login page', function () {
     $this->get(route('overview'))->assertRedirect(route('login'));
 });
 
+it('exposes log out on the mobile nav, not only the desktop sidebar', function () {
+    $owner = Organization::factory()->owner()->create();
+    Site::factory()->for_($owner)->create();
+
+    $this->actingAs(User::factory()->ownerAdmin($owner)->create())
+        ->get(route('cameras'))
+        ->assertOk()
+        ->assertSee('data-test="mobile-nav"', false)
+        ->assertSee('data-test="mobile-logout-button"', false)
+        ->assertSee('Log out');
+});
+
 it('shows the marketing landing to guests', function () {
     $this->get('/')
         ->assertOk()

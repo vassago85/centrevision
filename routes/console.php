@@ -7,6 +7,7 @@ use App\Jobs\GenerateMonthlyInvoices;
 use App\Jobs\GeneratePartnerPayouts;
 use App\Jobs\MatchVisits;
 use App\Jobs\PrunePlateData;
+use App\Jobs\PruneWebhookStaging;
 use App\Jobs\SendScheduledReports;
 use App\Jobs\SweepFtpDropFolder;
 use App\Jobs\TagRecurringPlates;
@@ -32,8 +33,11 @@ Schedule::job(new FlushPendingAlertEvents)->everyFifteenMinutes()->withoutOverla
 // Staff and tenant detection, run overnight when the previous day is complete.
 Schedule::job(new TagRecurringPlates)->dailyAt('02:15');
 
-// POPIA retention.
+// POPIA retention (DB rows + plate-capture JPEGs).
 Schedule::job(new PrunePlateData)->dailyAt('03:30');
+
+// Webhook inbox / quarantine TTL so a flood cannot fill the volume.
+Schedule::job(new PruneWebhookStaging)->hourly()->withoutOverlapping();
 
 // Enrichment: aggregate yesterday's visits + weather + holiday flags into
 // the plate-free `site_day_stats` rollup. Runs after MatchVisits has settled

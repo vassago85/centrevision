@@ -27,6 +27,9 @@ class ProcessHikvisionWebhook implements ShouldQueue
     /** Attachments are stored under this directory on the local disk. */
     public const CAPTURES_DIR = 'plate-captures';
 
+    /** Unparseable bodies move here so they are not retried forever. */
+    public const QUARANTINE_DIR = 'hikvision-webhook-quarantine';
+
     /**
      * How many attempts the worker gets. The controller has already returned
      * 200 to the camera, so a failure here does not lose the payload from
@@ -82,10 +85,26 @@ class ProcessHikvisionWebhook implements ShouldQueue
         $event = $parser->parse($body, $this->contentType);
 
         if ($event === null) {
+            // Motion / video-loss / tamper alerts are valid Hikvision XML
+            // but not plates. A busy site with HTTP Listening ticked on
+            // those rules would otherwise park a JPEG-bearing body in
+            // quarantine on every motion tick and never delete it.
+            if ($this->isKnownNonAnprAlert($body)) {
+                $disk->delete($this->inboxKey);
+
+                Log::info('Discarded non-ANPR Hikvision webhook', [
+                    'camera_id' => $this->cameraId,
+                    'content_type' => $this->contentType,
+                    'bytes' => strlen($body),
+                ]);
+
+                return;
+            }
+
             // Unparseable payloads are quarantined next to the inbox so we
             // can inspect what the camera actually sent without leaving them
-            // to be reprocessed forever.
-            $quarantineKey = 'hikvision-webhook-quarantine/'
+            // to be reprocessed forever. PruneWebhookStaging expires them.
+            $quarantineKey = self::QUARANTINE_DIR.'/'
                 .$this->cameraId.'/'
                 .basename($this->inboxKey);
 
@@ -123,7 +142,13 @@ class ProcessHikvisionWebhook implements ShouldQueue
         $disk = Storage::disk('local');
         $day = now()->format('Y/m/d');
 
+        $maxAttachmentBytes = (int) config('trafficflow.webhook_max_attachment_bytes');
+
         foreach ($attachments as $index => $attachment) {
+            if ($maxAttachmentBytes > 0 && strlen($attachment->bytes) > $maxAttachmentBytes) {
+                continue;
+            }
+
             $key = self::CAPTURES_DIR
                 .'/'.$camera->getKey()
                 .'/'.$day
@@ -131,6 +156,24 @@ class ProcessHikvisionWebhook implements ShouldQueue
 
             $disk->put($key, $attachment->bytes);
         }
+    }
+
+    /**
+     * True when the body is a Hikvision EventNotificationAlert that is not
+     * a plate read (VMD, videoloss, linedetection, heartbeats with XML).
+     * Garbage we do not recognise stays false so it is still quarantined.
+     */
+    protected function isKnownNonAnprAlert(string $body): bool
+    {
+        if (! str_contains($body, '<EventNotificationAlert') && ! str_contains($body, '<eventType>')) {
+            return false;
+        }
+
+        if (str_contains($body, '<ANPR>') || str_contains($body, '<licensePlate>')) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -148,7 +191,7 @@ class ProcessHikvisionWebhook implements ShouldQueue
 
         $disk->move(
             $this->inboxKey,
-            'hikvision-webhook-quarantine/'.$this->cameraId.'/'.basename($this->inboxKey),
+            self::QUARANTINE_DIR.'/'.$this->cameraId.'/'.basename($this->inboxKey),
         );
 
         Log::error('Hikvision webhook job failed after retries', [

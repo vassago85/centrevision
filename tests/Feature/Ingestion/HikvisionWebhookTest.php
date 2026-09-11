@@ -214,6 +214,73 @@ it('returns 404 for a non-existent camera id', function () {
         ->assertStatus(401);
 });
 
+it('discards a motion-detection alert instead of quarantining it', function () {
+    $vmd = <<<'XML'
+    <?xml version="1.0" encoding="UTF-8"?>
+    <EventNotificationAlert version="2.0">
+        <eventType>VMD</eventType>
+        <eventState>active</eventState>
+        <eventDescription>Motion detect</eventDescription>
+    </EventNotificationAlert>
+    XML;
+
+    $body = hikMultipart($vmd, [
+        ['content_type' => 'image/jpeg', 'filename' => 'scene.jpg', 'bytes' => str_repeat('x', 200_000)],
+    ]);
+
+    postHikWebhook(
+        $this->camera,
+        $body,
+        'multipart/form-data; boundary=MIME_boundary_ANPR',
+    )->assertOk();
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->count())->toBe(0);
+
+    $inboxFiles = Storage::disk('local')->allFiles(HikvisionWebhookController::INBOX_DIR);
+    $quarantineFiles = Storage::disk('local')->allFiles(ProcessHikvisionWebhook::QUARANTINE_DIR);
+
+    expect($inboxFiles)->toBeEmpty()
+        ->and($quarantineFiles)->toBeEmpty();
+});
+
+it('does not stage a webhook body larger than the configured cap', function () {
+    config(['trafficflow.webhook_max_bytes' => 64]);
+
+    postHikWebhook(
+        $this->camera,
+        hikXml(plate: 'JD45GP'),
+        'application/xml',
+    )->assertOk();
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->count())->toBe(0)
+        ->and(Storage::disk('local')->allFiles(HikvisionWebhookController::INBOX_DIR))->toBeEmpty()
+        ->and($this->camera->fresh()->webhook_last_seen_at)->not->toBeNull();
+});
+
+it('skips attached images larger than the per-file cap', function () {
+    config(['trafficflow.webhook_max_attachment_bytes' => 20]);
+
+    $body = hikMultipart(
+        xml: hikXml(plate: 'HK12GP'),
+        images: [
+            ['content_type' => 'image/jpeg', 'filename' => 'plate.jpg', 'bytes' => 'tiny'],
+            ['content_type' => 'image/jpeg', 'filename' => 'scene.jpg', 'bytes' => str_repeat('F', 200)],
+        ],
+    );
+
+    postHikWebhook(
+        $this->camera,
+        $body,
+        'multipart/form-data; boundary=MIME_boundary_ANPR',
+    )->assertOk();
+
+    $event = PlateEvent::withoutGlobalScope(SiteScope::class)->sole();
+    $prefix = ProcessHikvisionWebhook::CAPTURES_DIR.'/'.$this->camera->id.'/'.now()->format('Y/m/d');
+
+    expect(Storage::disk('local')->exists($prefix.'/'.$event->id.'-0.jpg'))->toBeTrue()
+        ->and(Storage::disk('local')->exists($prefix.'/'.$event->id.'-1.jpg'))->toBeFalse();
+});
+
 it('quarantines an unparseable payload without crashing', function () {
     postHikWebhook(
         $this->camera,

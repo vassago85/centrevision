@@ -153,7 +153,11 @@ it('lets a platform admin save a per-owner base fee override', function () {
 
     $fresh = $this->owner->fresh();
 
-    expect($fresh->setting('billing.base_fee_override'))->toBe(2500.0)
+    // Settings roundtrip through JSON, and JSON has no int/float distinction
+    // for whole numbers — 2500.0 comes back as int 2500. Assert numeric
+    // equality rather than strict identity so the intent (value persisted)
+    // is what the test enforces.
+    expect($fresh->setting('billing.base_fee_override'))->toEqual(2500.0)
         ->and($fresh->setting('billing.notes'))->toBe('6-month pilot')
         ->and($fresh->hasCustomBillingPlan())->toBeTrue();
 });

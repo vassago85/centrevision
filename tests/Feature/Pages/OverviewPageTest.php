@@ -272,6 +272,12 @@ it('leads with On Site Now on both Today and 7 days when the site has an exit ca
 it('uses the visitor-based Return Rate formula on the dashboard', function () {
     Camera::factory()->for($this->site)->exit()->create();
 
+    // The Return Rate arithmetic below assumes exactly two unique visitors
+    // in the window. The beforeEach seeds a SHOPPER1 visit for other tests
+    // in this file, so clear it here — otherwise the denominator becomes 3
+    // and the rate drifts to 33.3%.
+    Visit::query()->delete();
+
     // Two shoppers in the 7-day window; one of them also has a prior visit
     // before the window opens. The visitor-based Return Rate is therefore
     // exactly 50% (1 returning / 2 unique). The visit-weighted flavour on
@@ -416,7 +422,11 @@ it('surfaces public-holiday context in the visits-over-time chart annotations', 
         'local_date' => $holiday->toDateString(),
     ]);
 
-    $component = Livewire::test('pages::overview')->assertSet('rangeKey', '7d');
+    // Dashboard defaults to 'today', which only renders a single day and would
+    // never surface a chip for a holiday two days ago. Open on 7d explicitly.
+    $component = Livewire::withQueryParams(['range' => '7d'])
+        ->test('pages::overview')
+        ->assertSet('rangeKey', '7d');
 
     // The chip strip is the visible surface for the marker; the tooltip
     // annotation is baked into the chart payload and is what actually
@@ -444,7 +454,11 @@ it('drops public-holiday days from the daily chart when the toggle is on', funct
         'local_date' => $holiday->toDateString(),
     ]);
 
-    $component = Livewire::test('pages::overview')->assertSet('excludeHolidays', false);
+    // The visits-over-time chart is hour-bucketed on 'today' and day-bucketed
+    // on 7d. This test asserts day labels, so open on 7d explicitly.
+    $component = Livewire::withQueryParams(['range' => '7d'])
+        ->test('pages::overview')
+        ->assertSet('excludeHolidays', false);
 
     $labelsBefore = $component->instance()->visitsOverTime['labels'];
     expect($labelsBefore)->toContain($holiday->format('j M'));

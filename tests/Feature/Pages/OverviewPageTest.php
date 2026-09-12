@@ -97,12 +97,11 @@ it('shows the security and watchlist cards to owners', function () {
         ->assertSee('Recent Watchlist Hits');
 });
 
-it('shows disk usage to an owner', function () {
+it('hides disk usage from owners — infrastructure numbers are platform-only', function () {
     actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
 
     Livewire::test('pages::overview')
-        ->assertSee('Disk')
-        ->assertSee('Plate photos');
+        ->assertDontSee('Plate photos');
 });
 
 it('hides disk usage from shops', function () {

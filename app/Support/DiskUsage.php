@@ -120,19 +120,28 @@ class DiskUsage
 
     protected static function sumDirectory(string $absolutePath): int
     {
-        if (! is_dir($absolutePath)) {
+        if (! is_dir($absolutePath) || ! is_readable($absolutePath)) {
             return 0;
         }
 
         $total = 0;
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($absolutePath, FilesystemIterator::SKIP_DOTS),
-        );
 
-        foreach ($iterator as $file) {
-            if ($file->isFile()) {
-                $total += $file->getSize();
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($absolutePath, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::LEAVES_ONLY,
+                RecursiveIteratorIterator::CATCH_GET_CHILD,
+            );
+
+            foreach ($iterator as $file) {
+                if ($file->isFile()) {
+                    $total += $file->getSize();
+                }
             }
+        } catch (\Throwable $e) {
+            // A single unreadable subdirectory shouldn't take down the dashboard.
+            // Report and return whatever we managed to sum before the failure.
+            report($e);
         }
 
         return $total;

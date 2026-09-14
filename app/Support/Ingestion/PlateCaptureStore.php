@@ -5,6 +5,7 @@ namespace App\Support\Ingestion;
 use App\Jobs\ProcessHikvisionWebhook;
 use App\Models\PlateEvent;
 use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 /**
  * Locate the day-old plate/vehicle JPEGs stored next to a plate event.
@@ -30,7 +31,20 @@ class PlateCaptureStore
                 continue;
             }
 
-            foreach ($disk->files($directory) as $path) {
+            // A day-folder written by a queue worker running under the wrong
+            // uid can be unreadable to PHP-FPM (root:root 0700 was the
+            // symptom that took down the Activity plate view). Skip that
+            // folder rather than 500ing the whole component — the plate row
+            // still renders, we just cannot show its captures.
+            try {
+                $files = $disk->files($directory);
+            } catch (Throwable $e) {
+                report($e);
+
+                continue;
+            }
+
+            foreach ($files as $path) {
                 if (str_starts_with(basename($path), $prefix)) {
                     $found[] = $path;
                 }

@@ -111,6 +111,13 @@ services:
     # storage and clears caches once, so we bypass it here and run `schedule:run`
     # directly to avoid re-clearing every 60s.
     entrypoint: []
+    # Run as www-data so scheduled jobs that touch storage (plate captures,
+    # exports, reports) write with the same uid PHP-FPM uses in the app
+    # container. The Dockerfile already chowns /var/www/html to www-data at
+    # build time, and the app container's entrypoint chowns the shared storage
+    # volume on boot, so www-data has full access to everything by the time
+    # this container's process starts.
+    user: "www-data:www-data"
     command: sh -c "while true; do php /var/www/html/artisan schedule:run --verbose --no-interaction; sleep 60; done"
     environment:
       # APP_NAME must match the `app` service. Laravel derives the Redis key
@@ -164,6 +171,13 @@ services:
     container_name: centrevision-queue
     restart: unless-stopped
     entrypoint: []
+    # Run as www-data so plate-capture JPEGs written by ProcessHikvisionWebhook
+    # land with the same uid PHP-FPM (in the app container) later reads them
+    # with. Without this the queue runs as root, produces root:root 0700
+    # per-day folders under storage/app/private/plate-captures/{camera}/…,
+    # and every page that lists those folders (Activity plate view, disk-usage
+    # widget) 500s on Permission denied.
+    user: "www-data:www-data"
     command: php /var/www/html/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
     environment:
       # See the scheduler service — Laravel derives the Redis prefix from

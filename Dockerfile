@@ -34,6 +34,10 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # install-php-extensions handles the build-dep dance and cleanup for us.
 ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+# redis is pinned: PECL's REST metadata for redis 6.3.0 is currently broken
+# ("does not have REST dependency information available"), so
+# install-php-extensions can't resolve the "latest" alias. 6.2.0 is the last
+# widely-deployed stable and installs cleanly. Bump when upstream is fixed.
 RUN install-php-extensions \
     pdo_pgsql \
     mbstring \
@@ -43,7 +47,7 @@ RUN install-php-extensions \
     gd \
     zip \
     intl \
-    redis
+    redis-6.2.0
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

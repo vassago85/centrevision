@@ -46,6 +46,13 @@ def main() -> None:
     print(f"{plate} {confidence:.0f}")
 
 
+# A plate is only trusted when the same string comes out of at least this
+# many independent OCR attempts. A single high-confidence read is often
+# tesseract inventing characters from noise; a real plate shows up two or
+# three times across the scales and PSM modes.
+CONSENSUS_MIN = 2
+
+
 def best_read(image):
     height, width = image.shape[:2]
     scene = width > 900
@@ -56,29 +63,38 @@ def best_read(image):
         height, width = image.shape[:2]
 
     aspect = width / max(height, 1)
-    best = None
+    reads: list[tuple[str, float]] = []
 
     # A tight plate close-up: the whole image is the plate.
     if width <= 900 and 1.6 <= aspect <= 8:
-        best = better(best, ocr(image))
+        reads.extend(all_ocrs(image))
 
     # A vehicle crop (small, roughly square). Try the whole thing plus each
     # rectangle that looks like a plate.
     if width <= 900 and aspect < 1.6:
-        best = better(best, ocr(image))
+        reads.extend(all_ocrs(image))
 
     for crop in plate_regions(image):
-        best = better(best, ocr(crop))
+        reads.extend(all_ocrs(crop))
 
+    return consensus(reads)
+
+
+def consensus(reads):
+    """Return the plate the ensemble agrees on, or None."""
+    tallies: dict[str, list[float]] = {}
+    for plate, confidence in reads:
+        tallies.setdefault(plate, []).append(confidence)
+
+    best = None
+    for plate, confs in tallies.items():
+        if len(confs) < CONSENSUS_MIN:
+            continue
+        # Real plates repeat, so the extra attempts earn a bounded bonus.
+        confidence = min((sum(confs) / len(confs)) + min(len(confs), 4) * 5, 100.0)
+        if best is None or confidence > best[1]:
+            best = (plate, confidence)
     return best
-
-
-def better(current, candidate):
-    if candidate is None:
-        return current
-    if current is None or candidate[1] > current[1]:
-        return candidate
-    return current
 
 
 def plate_regions(image):
@@ -130,22 +146,24 @@ def plate_regions(image):
     return [crop for _area, crop in regions[:8]]
 
 
-def ocr(crop):
-    """Read one candidate region. Tries several scales and PSM modes so a
-    borderline character height is not the reason we miss the plate.
+def all_ocrs(crop):
+    """Return every plate tesseract could see in this region across scales
+    and PSM modes. The caller compares them and keeps the ones that agree.
     """
     if crop is None or crop.size == 0:
-        return None
+        return []
 
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
 
-    best = None
+    reads = []
     for target_height in OCR_HEIGHTS:
         variant = _resize_to_height(gray, target_height)
         for psm in ("7", "8"):
-            best = _better(best, _run_tesseract(variant, psm))
-    return best
+            result = _run_tesseract(variant, psm)
+            if result is not None:
+                reads.append(result)
+    return reads
 
 
 def _resize_to_height(gray, target_height):
@@ -188,14 +206,6 @@ def _run_tesseract(gray, psm):
             pass
 
     return best_line(completed.stdout)
-
-
-def _better(current, candidate):
-    if candidate is None:
-        return current
-    if current is None or candidate[1] > current[1]:
-        return candidate
-    return current
 
 
 def best_line(tsv: str):

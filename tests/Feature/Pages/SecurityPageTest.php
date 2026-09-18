@@ -2,6 +2,7 @@
 
 use App\Enums\VisitStatus;
 use App\Enums\WatchlistKind;
+use App\Jobs\ProcessHikvisionWebhook;
 use App\Models\Camera;
 use App\Models\Organization;
 use App\Models\PlateEvent;
@@ -11,6 +12,7 @@ use App\Models\User;
 use App\Models\Visit;
 use App\Models\WatchlistPlate;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
 beforeEach(function () {
@@ -222,4 +224,42 @@ it('shows an entry-only notice and suppresses phantom dwell alerts when a site h
         ->assertSee('requires exit camera')
         // The plate is not treated as a dwell breach.
         ->assertDontSee('ENTRY01GP');
+});
+
+it('shows the latest camera photo and opens it', function () {
+    Storage::fake('local');
+
+    $event = PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'PHOTO1GP',
+        'captured_at' => Date::now()->subMinutes(5),
+    ]);
+
+    Storage::disk('local')->put(
+        ProcessHikvisionWebhook::CAPTURES_DIR
+            .'/'.$this->camera->id.'/'
+            .$event->captured_at->format('Y/m/d').'/'
+            .$event->id.'-0.jpg',
+        'jpeg-bytes',
+    );
+
+    Livewire::test('pages::security')
+        ->assertSee('Latest photos')
+        ->assertSee('PHOTO1GP')
+        ->assertSee('data-test="view-captures-'.$event->id.'"', false)
+        ->call('viewCaptures', $event->id)
+        ->assertSet('viewingCaptureEventId', $event->id)
+        ->assertSee(route('activity.captures.show', [$event, 0]), false);
+});
+
+it('does not list a detection whose photo has already been deleted', function () {
+    Storage::fake('local');
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'NOPHOTOGP',
+        'captured_at' => Date::now()->subMinutes(5),
+    ]);
+
+    Livewire::test('pages::security')
+        ->assertSee('No camera photos from the last 24 hours.')
+        ->assertDontSee('NOPHOTOGP');
 });

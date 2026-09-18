@@ -3,9 +3,11 @@
 use App\Enums\WatchlistKind;
 use App\Models\AlertEvent;
 use App\Models\Camera;
+use App\Models\PlateEvent;
 use App\Models\WatchlistPlate;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\SecurityLogExporter;
+use App\Support\Ingestion\PlateCaptureStore;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
@@ -32,6 +34,9 @@ new #[Title('Security')] class extends Component {
      * day just produces a CSV with only the header row.
      */
     public string $logDate = '';
+
+    /** Event whose snapshots are open in the photo modal. */
+    public ?int $viewingCaptureEventId = null;
 
     public function mount(): void
     {
@@ -149,6 +154,73 @@ new #[Title('Security')] class extends Component {
             ->orderByDesc('detected_at')
             ->limit(20)
             ->get();
+    }
+
+    /**
+     * Recent detections that still have a JPEG on disk. Photos are deleted
+     * after a day, so anything older is skipped before we touch the filesystem.
+     *
+     * @return Collection<int, PlateEvent>
+     */
+    #[Computed]
+    public function latestPhotos(): Collection
+    {
+        $events = PlateEvent::query()
+            ->with('camera:id,name')
+            ->when($this->cameraId, fn ($query, $id) => $query->where('camera_id', $id))
+            ->where('captured_at', '>=', now()->subDay())
+            ->orderByDesc('captured_at')
+            ->limit(40)
+            ->get();
+
+        $store = app(PlateCaptureStore::class);
+
+        return $events
+            ->map(function (PlateEvent $event) use ($store): PlateEvent {
+                $event->setAttribute('capture_count', count($store->pathsFor($event)));
+
+                return $event;
+            })
+            ->filter(fn (PlateEvent $event) => $event->getAttribute('capture_count') > 0)
+            ->take(8)
+            ->values();
+    }
+
+    /**
+     * @return list<string>
+     */
+    #[Computed]
+    public function viewingCaptureUrls(): array
+    {
+        if ($this->viewingCaptureEventId === null) {
+            return [];
+        }
+
+        $event = PlateEvent::query()->with('camera')->find($this->viewingCaptureEventId);
+
+        if ($event === null || auth()->user()?->cannot('view', $event)) {
+            return [];
+        }
+
+        $count = count(app(PlateCaptureStore::class)->pathsFor($event));
+
+        if ($count === 0) {
+            return [];
+        }
+
+        return collect(range(0, $count - 1))
+            ->map(fn (int $index) => route('activity.captures.show', [$event, $index]))
+            ->all();
+    }
+
+    public function viewCaptures(int $eventId): void
+    {
+        $this->viewingCaptureEventId = $eventId;
+    }
+
+    public function closeCaptures(): void
+    {
+        $this->viewingCaptureEventId = null;
     }
 
     /**
@@ -325,6 +397,41 @@ new #[Title('Security')] class extends Component {
         </a>
     </div>
 
+    <x-panel heading="Latest photos">
+        <p class="mb-3 text-[12px] text-ink-muted">Snapshots from the last 24 hours. Older photos are deleted; the plate record stays.</p>
+        @if ($this->latestPhotos->isEmpty())
+            <x-placeholder size="compact">No camera photos from the last 24 hours.</x-placeholder>
+        @else
+            <div class="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
+                @foreach ($this->latestPhotos as $event)
+                    <button
+                        type="button"
+                        wire:click="viewCaptures({{ $event->id }})"
+                        wire:key="latest-photo-{{ $event->id }}"
+                        data-test="view-captures-{{ $event->id }}"
+                        class="overflow-hidden rounded-lg border border-line bg-surface-2 text-left transition-colors hover:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                        <img
+                            src="{{ route('activity.captures.show', [$event, 0]) }}"
+                            alt="{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}"
+                            class="aspect-video w-full bg-surface-3 object-cover"
+                        />
+                        <div class="px-2.5 py-2">
+                            <p class="font-mono text-[13px] font-semibold text-ink">{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</p>
+                            <p class="text-[11.5px] text-ink-muted">
+                                {{ $event->captured_at->format('D H:i') }}
+                                · {{ $event->camera?->name ?? '—' }}
+                                @if ($event->getAttribute('capture_count') > 1)
+                                    · {{ $event->getAttribute('capture_count') }} photos
+                                @endif
+                            </p>
+                        </div>
+                    </button>
+                @endforeach
+            </div>
+        @endif
+    </x-panel>
+
     <x-panel heading="Recent alert emails">
         <x-data-table
             :headers="['When', 'Rule', 'Plate', 'Status']"
@@ -411,5 +518,19 @@ new #[Title('Security')] class extends Component {
             </x-data-table>
         </x-panel>
     </div>
+
+    <flux:modal wire:model.self="viewingCaptureEventId" class="md:w-[40rem]" @close="$wire.closeCaptures()">
+        <div class="space-y-3">
+            <flux:heading size="lg">{{ __('Camera photos') }}</flux:heading>
+            <flux:text class="text-ink-2">
+                {{ __('Kept for 24 hours, then deleted. The plate record stays in the database.') }}
+            </flux:text>
+            @forelse ($this->viewingCaptureUrls as $url)
+                <img src="{{ $url }}" alt="" class="w-full rounded-lg border border-line bg-surface-2" />
+            @empty
+                <p class="text-[13px] text-ink-muted">{{ __('These photos have already been removed.') }}</p>
+            @endforelse
+        </div>
+    </flux:modal>
 </div>
 

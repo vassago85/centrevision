@@ -564,9 +564,19 @@ class TrafficAnalytics
      * because this powers the "have we seen this shopper before?" metric.
      * If you need a rolling lookback, use {@see returnRate30Day()} instead.
      * Staff/regular plates are excluded via the base query.
+     *
+     * Returns null when the site has no non-recurring visits *at all* before
+     * `$range->from`. In that case the metric is genuinely undefined — a
+     * brand-new site cannot say "0 of your visitors are returning", because
+     * we have no history to compare against. Callers must render null as
+     * "not enough history yet" and never as 0.
      */
-    public function returningVehicles(DateRange $range): int
+    public function returningVehicles(DateRange $range): ?int
     {
+        if (! $this->hasIdentityHistoryBefore($range->from)) {
+            return null;
+        }
+
         $platesInPeriod = $this->baseQuery($range)->select('visits.plate_number')->distinct();
 
         return $this->identityQuery()
@@ -576,9 +586,21 @@ class TrafficAnalytics
             ->count('plate_number');
     }
 
+    /**
+     * When the site has no prior history {@see returningVehicles} is null,
+     * and every unique visitor in the window is — from our records —
+     * first-time by definition. The number is real and worth showing even
+     * though the returning count isn't.
+     */
     public function firstTimeVehicles(DateRange $range): int
     {
-        return max(0, $this->uniqueVehicles($range) - $this->returningVehicles($range));
+        $returning = $this->returningVehicles($range);
+
+        if ($returning === null) {
+            return $this->uniqueVehicles($range);
+        }
+
+        return max(0, $this->uniqueVehicles($range) - $returning);
     }
 
     /**
@@ -589,8 +611,13 @@ class TrafficAnalytics
      * A visitor is "returning" if the same plate has any visit before
      * `$range->from` (all-time lookup). Both numerator and denominator run
      * through the shopper base query, so staff/regular-tagged plates are
-     * excluded on both sides. Returns null when the window has no unique
-     * visitors so an empty period does not report 0%.
+     * excluded on both sides.
+     *
+     * Returns null in two "undefined" cases so the UI can render "—"
+     * instead of a misleading 0 %:
+     *   - the window has no unique visitors (nothing to divide by);
+     *   - the site has no non-recurring history before the window opens,
+     *     so no one *could* be returning (see {@see returningVehicles}).
      *
      * Both Dashboard and Reports surface this method under the "Return
      * Rate" label. The visit-weighted {@see returnRatePercentage()} is
@@ -604,12 +631,20 @@ class TrafficAnalytics
             return null;
         }
 
-        return round($this->returningVehicles($range) / $unique * 100, 1);
+        $returning = $this->returningVehicles($range);
+
+        if ($returning === null) {
+            return null;
+        }
+
+        return round($returning / $unique * 100, 1);
     }
 
     /**
      * Of unique vehicles in the window, how many also visited in the 30 days
-     * immediately before it. Null when the window itself is empty.
+     * immediately before it. Null when the window itself is empty, or when
+     * the 30-day lookback window is entirely before the site's history —
+     * same "undefined vs 0 %" distinction as {@see returningVehicleRate}.
      */
     public function returnRate30Day(DateRange $range): ?float
     {
@@ -626,6 +661,12 @@ class TrafficAnalytics
             $range->from->copy()->subSecond(),
         );
 
+        // The lookback is empty — usually because the site is younger than
+        // the reporting window. Refuse to report 0 % against nothing.
+        if (! $this->baseQuery($lookback)->exists()) {
+            return null;
+        }
+
         $priorPlates = $this->baseQuery($lookback)->select('visits.plate_number')->distinct();
 
         $returned = $this->baseQuery($range)
@@ -634,6 +675,18 @@ class TrafficAnalytics
             ->count('plate_number');
 
         return round($returned / $unique * 100, 1);
+    }
+
+    /**
+     * True when the site has at least one visit in the current audience
+     * (shopper / staff / all) that predates the given moment. Used to
+     * distinguish "genuinely zero returning" from "we have no baseline yet".
+     */
+    protected function hasIdentityHistoryBefore(CarbonInterface $when): bool
+    {
+        return $this->identityQuery()
+            ->where('entered_at', '<', $when)
+            ->exists();
     }
 
     /**

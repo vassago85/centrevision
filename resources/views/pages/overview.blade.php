@@ -282,7 +282,14 @@ new #[Title('Dashboard')] class extends Component
             'value' => $returnRate === null ? '—' : $returnRate.'%',
             'icon' => 'arrow-path',
             'compare' => $a->comparison($returnRate, $prevReturn),
-            'vs' => 'visitors seen before this period',
+            // A null return rate means the site's own history does not
+            // reach back before the reporting window, so the metric is
+            // undefined rather than genuinely 0 %. Say that instead of
+            // leaving the caption on the "seen before this period"
+            // definition, which reads as a broken zero to the customer.
+            'vs' => $returnRate === null
+                ? 'not enough history yet'
+                : 'visitors seen before this period',
         ];
 
         $dwell = $a->dwellSummary($range);

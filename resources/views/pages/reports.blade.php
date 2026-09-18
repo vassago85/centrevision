@@ -210,7 +210,10 @@ new #[Title('Reports')] class extends Component {
                 $returnRate === null ? '—' : $returnRate.'%',
                 $returnRate,
                 $previous ? $a->returningVehicleRate($previous) : null,
-                null,
+                // A dash here means the site has no history before the
+                // window opens, so "returning" cannot be measured yet.
+                // Spell that out so the card doesn't look like a broken 0 %.
+                $returnRate === null ? 'Not enough history yet' : null,
                 'arrow-path',
             ),
             $this->kpi(
@@ -269,8 +272,8 @@ new #[Title('Reports')] class extends Component {
             ],
             [
                 'label' => 'Returning visitors',
-                'value' => number_format($returning),
-                'detail' => null,
+                'value' => $returning === null ? '—' : number_format($returning),
+                'detail' => $returning === null ? 'Not enough history yet' : null,
             ],
             [
                 'label' => 'Staff / regular excluded',
@@ -974,14 +977,32 @@ new #[Title('Reports')] class extends Component {
     @endif
 
     @if ($section === 'behaviour')
+        @php
+            // Cache these because returningVehicles and returningVehicleRate
+            // both hit the DB, and the null-vs-value branching below asks
+            // for each result twice.
+            $behaviourAnalytics = $this->analytics;
+            $behaviourRange = $this->range;
+            $behaviourReturning = $behaviourAnalytics->returningVehicles($behaviourRange);
+            $behaviourReturnRate = $behaviourAnalytics->returningVehicleRate($behaviourRange);
+            $behaviourReturn30 = $behaviourAnalytics->returnRate30Day($behaviourRange);
+        @endphp
+
         <div class="mb-6 grid grid-cols-3 gap-4 max-sm:grid-cols-1">
-            <x-kpi-card label="First-time visitors" :value="number_format($this->analytics->firstTimeVehicles($this->range))" icon="user-group" />
-            <x-kpi-card label="Returning visitors" :value="number_format($this->analytics->returningVehicles($this->range))" icon="arrow-path" />
+            <x-kpi-card label="First-time visitors" :value="number_format($behaviourAnalytics->firstTimeVehicles($behaviourRange))" icon="user-group" />
+            <x-kpi-card
+                label="Returning visitors"
+                :value="$behaviourReturning === null ? '—' : number_format($behaviourReturning)"
+                icon="arrow-path"
+                :comparison="$behaviourReturning === null ? 'Not enough history yet' : null"
+            />
             <x-kpi-card
                 label="Return rate"
-                :value="$this->analytics->returningVehicleRate($this->range) === null ? '—' : $this->analytics->returningVehicleRate($this->range).'%'"
+                :value="$behaviourReturnRate === null ? '—' : $behaviourReturnRate.'%'"
                 icon="arrow-path"
-                :comparison="$this->analytics->returnRate30Day($this->range) === null ? null : '30-day return rate: '.$this->analytics->returnRate30Day($this->range).'%'"
+                :comparison="$behaviourReturnRate === null
+                    ? 'Not enough history yet'
+                    : ($behaviourReturn30 === null ? null : '30-day return rate: '.$behaviourReturn30.'%')"
             />
         </div>
 

@@ -42,7 +42,10 @@ class ReportExporter
         fputcsv($handle, ['Summary']);
         fputcsv($handle, ['Visits', $summary['total']]);
         fputcsv($handle, ['Unique visitors', $summary['unique']]);
-        fputcsv($handle, ['Returning visitors', $summary['returning']]);
+        // Empty rather than 0 when the site has no non-recurring history
+        // before the reporting window — same "unknown vs zero" distinction
+        // the two return-rate rows below already apply.
+        fputcsv($handle, ['Returning visitors', $summary['returning'] ?? '']);
         fputcsv($handle, ['Return rate (%)', $summary['return_rate'] ?? '']);
         fputcsv($handle, ['30-day return rate (%)', $summary['return_rate_30d'] ?? '']);
         fputcsv($handle, ['Daily average', $summary['daily_average']]);

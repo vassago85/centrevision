@@ -399,9 +399,21 @@ it('return rate is null when the window has no unique visitors', function () {
 it('return rate leaves staff plates out of both numerator and denominator', function () {
     // A staff plate seen months ago and again inside the window would flip
     // return rate to 100% if it slipped through — that's the exact bug the
-    // recurring-tag exclusion is supposed to prevent.
+    // recurring-tag exclusion is supposed to prevent. To *test* that in
+    // isolation we also add a non-recurring shopper before the window, so
+    // the returning-vehicles metric has real prior history to work
+    // against; otherwise it would legitimately come back null ("not enough
+    // history yet"), which is a different property and covered by its own
+    // test.
     Visit::factory()->for($this->site)->create([
         'plate_number' => 'STAFF001',
+        'entered_at' => Date::now()->subDays(20),
+        'exited_at' => Date::now()->subDays(20)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'OLDSHOP1',
         'entered_at' => Date::now()->subDays(20),
         'exited_at' => Date::now()->subDays(20)->addHour(),
         'dwell_minutes' => 60,
@@ -420,6 +432,56 @@ it('return rate leaves staff plates out of both numerator and denominator', func
     expect($this->analytics->uniqueVehicles($this->range))->toBe(1)
         ->and($this->analytics->returningVehicles($this->range))->toBe(0)
         ->and($this->analytics->returningVehicleRate($this->range))->toBe(0.0);
+});
+
+it('return rate is null when the site has no non-recurring history before the window', function () {
+    // A brand-new site (or a young demo tenant) has all its visits inside
+    // the reporting window. With no prior baseline we cannot say whether
+    // anyone is "returning" — the honest answer is null, so the UI can
+    // render "not enough history yet" instead of a misleading 0 %.
+    visitAt($this->site, 'FIRSTONE', 1);
+    visitAt($this->site, 'SECONDONE', 2);
+    visitAt($this->site, 'FIRSTONE', 3); // repeat inside the window
+
+    expect($this->analytics->uniqueVehicles($this->range))->toBe(2)
+        ->and($this->analytics->returningVehicles($this->range))->toBeNull()
+        ->and($this->analytics->returningVehicleRate($this->range))->toBeNull()
+        // First-time still has a real answer: every visitor we've seen is
+        // new to *us*, so it equals uniqueVehicles.
+        ->and($this->analytics->firstTimeVehicles($this->range))->toBe(2);
+});
+
+it('return rate is null when only recurring plates predate the window', function () {
+    // Same "no baseline" case as above, but proves it also holds when
+    // the only prior data is staff/regular plates that the shopper
+    // identity query strips out.
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'STAFFONLY',
+        'entered_at' => Date::now()->subDays(20),
+        'exited_at' => Date::now()->subDays(20)->addHour(),
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+    PlateTag::create([
+        'site_id' => $this->site->id,
+        'plate_number' => 'STAFFONLY',
+        'tag' => PlateTagType::RecurringPattern,
+        'tagged_at' => now(),
+    ]);
+
+    visitAt($this->site, 'SHOPPER1', 2);
+
+    expect($this->analytics->returningVehicles($this->range))->toBeNull()
+        ->and($this->analytics->returningVehicleRate($this->range))->toBeNull();
+});
+
+it('30-day return rate is null when the 30-day lookback has no history', function () {
+    // Symmetry check with the all-time return rate: rolling-30-day rate
+    // must not read 0 % either when the lookback itself is empty.
+    visitAt($this->site, 'FIRSTONE', 1);
+    visitAt($this->site, 'FIRSTONE', 3);
+
+    expect($this->analytics->returnRate30Day($this->range))->toBeNull();
 });
 
 it('return rate treats prior visits as returning regardless of how long ago they happened', function () {

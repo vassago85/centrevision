@@ -89,6 +89,23 @@ it('lists only vehicles past the chosen threshold', function () {
         ->assertDontSee('MID001GP');
 });
 
+it('links each over-threshold plate to its history', function () {
+    openVisit($this->site, 'HIST01GP', 6);
+
+    Livewire::test('pages::security')
+        ->assertSee('History')
+        ->assertSeeHtml(route('vehicle', ['plate' => 'HIST01GP']));
+});
+
+it('does not list unknown plates as over threshold', function () {
+    openVisit($this->site, 'UNKNOWN', 8);
+    openVisit($this->site, 'KEEP01GP', 6);
+
+    Livewire::test('pages::security')
+        ->assertSee('KEEP01GP')
+        ->assertDontSee('UNKNOWN');
+});
+
 it('shows how long each vehicle has been on site', function () {
     openVisit($this->site, 'LONG01GP', 6);
 

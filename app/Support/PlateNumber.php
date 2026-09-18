@@ -18,6 +18,15 @@ class PlateNumber
     }
 
     /**
+     * Cameras report "unknown" when OCR fails. That is not a vehicle, so it
+     * must not sit on the security desk as a dwell alert.
+     */
+    public static function isUnknown(?string $plate): bool
+    {
+        return static::normalise($plate) === 'UNKNOWN';
+    }
+
+    /**
      * Re-space a normalised South African plate for display: JD45GP -> JD 45 GP.
      * Anything that does not match the common province format is returned as-is.
      */

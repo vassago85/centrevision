@@ -68,6 +68,26 @@ it('lists open visits past the threshold, longest first', function () {
         ->and($rows->first()->is($long))->toBeTrue();
 });
 
+it('excludes unread unknown plates from dwell alerts', function () {
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'UNKNOWN',
+        'entered_at' => Date::now()->subHours(12),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'REAL01GP',
+        'entered_at' => Date::now()->subHours(6),
+        'exited_at' => null,
+        'dwell_minutes' => null,
+        'status' => VisitStatus::Open,
+    ]);
+
+    expect($this->security->overThreshold(4)->pluck('plate_number')->all())->toBe(['REAL01GP']);
+});
+
 it('still shows staff plates to security', function () {
     Visit::factory()->for($this->site)->create([
         'plate_number' => 'STAFF001',

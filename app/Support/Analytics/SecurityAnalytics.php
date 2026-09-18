@@ -38,6 +38,9 @@ class SecurityAnalytics
      * camera. Useful when a site has multiple entrance lanes and the
      * operator wants to look at one of them.
      *
+     * Unread plates stored as UNKNOWN are dropped — the camera failed OCR,
+     * so there is no vehicle history to open.
+     *
      * @return Collection<int, Visit>
      */
     public function overThreshold(int $thresholdHours, ?int $cameraId = null): Collection
@@ -45,6 +48,7 @@ class SecurityAnalytics
         return Visit::query()
             ->open()
             ->where('entered_at', '<=', Date::now()->subHours($thresholdHours))
+            ->where('plate_number', '!=', 'UNKNOWN')
             ->whereIn('site_id', $this->sitesWithExitTracking())
             ->when($cameraId, fn ($q, $id) => $q->whereHas('entryEvent', fn ($ev) => $ev->where('camera_id', $id)))
             ->with(['site:id,name', 'entryEvent.camera:id,name'])

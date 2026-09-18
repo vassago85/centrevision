@@ -435,11 +435,19 @@ new #[Title('Security')] class extends Component {
                         'text-warning' => $minutes < ($thresholdHours + 1) * 60,
                     ])>{{ $this->onSiteFor($minutes) }}</td>
                     <td class="border-b border-line py-2 text-right">
-                        <flux:button
-                            size="xs"
-                            variant="ghost"
-                            wire:click="watch({{ $visit->site_id }}, '{{ $visit->plate_number }}')"
-                        >Watch</flux:button>
+                        <div class="flex items-center justify-end gap-1">
+                            <flux:button
+                                size="xs"
+                                variant="ghost"
+                                :href="route('vehicle', ['plate' => $visit->plate_number])"
+                                wire:navigate
+                            >History</flux:button>
+                            <flux:button
+                                size="xs"
+                                variant="ghost"
+                                wire:click="watch({{ $visit->site_id }}, '{{ $visit->plate_number }}')"
+                            >Watch</flux:button>
+                        </div>
                     </td>
                 </tr>
             @endforeach

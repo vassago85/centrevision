@@ -22,8 +22,8 @@ Artisan::command('inspire', function () {
 // Reliability fallback for cameras whose alert stream has dropped.
 Schedule::job(new SweepFtpDropFolder)->everyFiveMinutes()->withoutOverlapping();
 
-// Turn raw events into visits. Frequent enough that the Security view is
-// meaningfully live, cheap because it only reads unprocessed events.
+// Backstop. Captures also dispatch MatchVisits immediately so "on site"
+// does not lag the Latest activity table by up to two minutes.
 Schedule::job(new MatchVisits)->everyTwoMinutes()->withoutOverlapping();
 
 // Pattern security alerts (odd-hour / multi-entry / dwell age) + quiet-hour flush.

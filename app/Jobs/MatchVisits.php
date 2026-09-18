@@ -47,8 +47,19 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
 
     public function handle(): void
     {
+        // A capture can land while this pass is already reading. Loop until
+        // a pass finds nothing new so that event is not stuck until the
+        // scheduled backstop — that lag is what made Latest activity show
+        // an exit as still on site, and an entry as not.
+        do {
+            $processedAny = false;
+
+            foreach ($this->sites() as $site) {
+                $processedAny = $this->matchSite($site) || $processedAny;
+            }
+        } while ($processedAny && $this->hasUnprocessedEvents());
+
         foreach ($this->sites() as $site) {
-            $this->matchSite($site);
             $this->orphanStaleVisits($site);
             app(AlertEvaluator::class)->evaluateDwellForSite($site);
         }
@@ -65,7 +76,10 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             ->cursor();
     }
 
-    protected function matchSite(Site $site): void
+    /**
+     * @return bool True when at least one event was paired on this pass.
+     */
+    protected function matchSite(Site $site): bool
     {
         $cameraIds = Camera::query()
             ->withoutGlobalScope(SiteScope::class)
@@ -73,8 +87,10 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             ->pluck('id');
 
         if ($cameraIds->isEmpty()) {
-            return;
+            return false;
         }
+
+        $processedAny = false;
 
         PlateEvent::query()
             ->withoutGlobalScope(SiteScope::class)
@@ -83,11 +99,66 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             ->whereNotNull('direction')
             ->orderBy('captured_at')
             ->orderBy('id')
-            ->chunkById(500, function ($events) use ($site): void {
+            ->chunkById(500, function ($events) use ($site, &$processedAny): void {
                 foreach ($events as $event) {
-                    DB::transaction(fn () => $this->apply($site, $event));
+                    $applied = DB::transaction(function () use ($site, $event): bool {
+                        // Another worker (the scheduler, or a pass kicked off
+                        // by a different capture) may already have taken this
+                        // row. Skip it rather than opening a second visit.
+                        $locked = PlateEvent::query()
+                            ->withoutGlobalScope(SiteScope::class)
+                            ->whereKey($event->getKey())
+                            ->whereNull('processed_at')
+                            ->lockForUpdate()
+                            ->first();
+
+                        if ($locked === null) {
+                            return false;
+                        }
+
+                        $this->apply($site, $locked);
+
+                        return true;
+                    });
+
+                    $processedAny = $processedAny || $applied;
                 }
             });
+
+        return $processedAny;
+    }
+
+    /**
+     * True when a capture with a direction is still waiting to be paired.
+     * Scoped the same way as {@see matchSite()} so a direction-less event
+     * cannot keep the pass spinning.
+     */
+    protected function hasUnprocessedEvents(): bool
+    {
+        $siteIds = Site::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->when($this->siteId !== null, fn ($query) => $query->whereKey($this->siteId))
+            ->pluck('id');
+
+        if ($siteIds->isEmpty()) {
+            return false;
+        }
+
+        $cameraIds = Camera::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->whereIn('site_id', $siteIds)
+            ->pluck('id');
+
+        if ($cameraIds->isEmpty()) {
+            return false;
+        }
+
+        return PlateEvent::query()
+            ->withoutGlobalScope(SiteScope::class)
+            ->whereIn('camera_id', $cameraIds)
+            ->whereNull('processed_at')
+            ->whereNotNull('direction')
+            ->exists();
     }
 
     protected function apply(Site $site, PlateEvent $event): void

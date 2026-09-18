@@ -26,6 +26,26 @@ function capture(string $plate, ?CarbonInterface $at = null, ?PlateDirection $di
     );
 }
 
+it('updates on-site status as soon as the capture is stored', function () {
+    $exit = Camera::factory()->exit()->create(['site_id' => $this->site->id]);
+
+    // An entry must be on site immediately. Waiting for the two-minute
+    // matcher is what made a vehicle that had just come in show as "—".
+    $this->recorder->record($this->camera, capture('JD45GP', now()->subMinutes(10), PlateDirection::In));
+
+    $open = Visit::query()->sole();
+
+    expect($open->status)->toBe(VisitStatus::Open)
+        ->and($open->plate_number)->toBe('JD45GP');
+
+    // And an exit must clear it immediately, not leave the open visit
+    // standing so the row still says "On site".
+    $this->recorder->record($exit, capture('JD45GP', now(), PlateDirection::Out));
+
+    expect(Visit::query()->sole()->status)->toBe(VisitStatus::Closed)
+        ->and(Visit::query()->where('status', VisitStatus::Open)->count())->toBe(0);
+});
+
 it('normalises the plate before storing it', function () {
     $event = $this->recorder->record($this->camera, capture('jd 45-gp'));
 

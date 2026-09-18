@@ -3,6 +3,7 @@
 namespace App\Services\Ingestion;
 
 use App\Enums\VisitStatus;
+use App\Jobs\MatchVisits;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Scopes\SiteScope;
@@ -61,6 +62,14 @@ class PlateEventRecorder
         }
 
         $this->touchCamera($camera, $capture);
+
+        // "On site" is an open visit, not the direction badge on this row.
+        // Match immediately — the two-minute schedule is only a backstop.
+        // Waiting for it is what made a fresh entry look off site and a
+        // fresh exit look still on site.
+        if ($direction !== null) {
+            MatchVisits::dispatch();
+        }
 
         return $event;
     }

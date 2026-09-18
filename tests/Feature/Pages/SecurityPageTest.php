@@ -243,15 +243,17 @@ it('shows the latest camera photo and opens it', function () {
     );
 
     Livewire::test('pages::security')
-        ->assertSee('Latest photos')
+        ->assertSee('Latest detections')
+        ->assertDontSee('Latest photos')
         ->assertSee('PHOTO1GP')
+        ->assertSee('Photos')
         ->assertSee('data-test="view-captures-'.$event->id.'"', false)
         ->call('viewCaptures', $event->id)
         ->assertSet('viewingCaptureEventId', $event->id)
         ->assertSee(route('activity.captures.show', [$event, 0]), false);
 });
 
-it('does not list a detection whose photo has already been deleted', function () {
+it('lists a detection without a Photos button once the jpeg is gone', function () {
     Storage::fake('local');
 
     PlateEvent::factory()->for($this->camera)->create([
@@ -260,6 +262,6 @@ it('does not list a detection whose photo has already been deleted', function ()
     ]);
 
     Livewire::test('pages::security')
-        ->assertSee('No camera photos from the last 24 hours.')
-        ->assertDontSee('NOPHOTOGP');
+        ->assertSee('NOPHOTOGP')
+        ->assertDontSee('data-test="view-captures-', false);
 });

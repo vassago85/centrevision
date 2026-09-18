@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\PlateDirection;
 use App\Enums\WatchlistKind;
 use App\Models\AlertEvent;
 use App\Models\Camera;
@@ -157,33 +158,28 @@ new #[Title('Security')] class extends Component {
     }
 
     /**
-     * Recent detections that still have a JPEG on disk. Photos are deleted
-     * after a day, so anything older is skipped before we touch the filesystem.
+     * Recent detections for the desk log. Photos only exist for a day, so
+     * the window matches that — a Photos button is shown only when a JPEG
+     * is still on disk.
      *
      * @return Collection<int, PlateEvent>
      */
     #[Computed]
-    public function latestPhotos(): Collection
+    public function latestDetections(): Collection
     {
         $events = PlateEvent::query()
             ->with('camera:id,name')
             ->when($this->cameraId, fn ($query, $id) => $query->where('camera_id', $id))
             ->where('captured_at', '>=', now()->subDay())
             ->orderByDesc('captured_at')
-            ->limit(40)
+            ->limit(15)
             ->get();
 
         $store = app(PlateCaptureStore::class);
 
-        return $events
-            ->map(function (PlateEvent $event) use ($store): PlateEvent {
-                $event->setAttribute('capture_count', count($store->pathsFor($event)));
-
-                return $event;
-            })
-            ->filter(fn (PlateEvent $event) => $event->getAttribute('capture_count') > 0)
-            ->take(8)
-            ->values();
+        return $events->each(function (PlateEvent $event) use ($store): void {
+            $event->setAttribute('capture_count', count($store->pathsFor($event)));
+        });
     }
 
     /**
@@ -397,41 +393,6 @@ new #[Title('Security')] class extends Component {
         </a>
     </div>
 
-    <x-panel heading="Latest photos">
-        <p class="mb-3 text-[12px] text-ink-muted">Snapshots from the last 24 hours. Older photos are deleted; the plate record stays.</p>
-        @if ($this->latestPhotos->isEmpty())
-            <x-placeholder size="compact">No camera photos from the last 24 hours.</x-placeholder>
-        @else
-            <div class="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-                @foreach ($this->latestPhotos as $event)
-                    <button
-                        type="button"
-                        wire:click="viewCaptures({{ $event->id }})"
-                        wire:key="latest-photo-{{ $event->id }}"
-                        data-test="view-captures-{{ $event->id }}"
-                        class="overflow-hidden rounded-lg border border-line bg-surface-2 text-left transition-colors hover:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                        <img
-                            src="{{ route('activity.captures.show', [$event, 0]) }}"
-                            alt="{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}"
-                            class="aspect-video w-full bg-surface-3 object-cover"
-                        />
-                        <div class="px-2.5 py-2">
-                            <p class="font-mono text-[13px] font-semibold text-ink">{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</p>
-                            <p class="text-[11.5px] text-ink-muted">
-                                {{ $event->captured_at->format('D H:i') }}
-                                · {{ $event->camera?->name ?? '—' }}
-                                @if ($event->getAttribute('capture_count') > 1)
-                                    · {{ $event->getAttribute('capture_count') }} photos
-                                @endif
-                            </p>
-                        </div>
-                    </button>
-                @endforeach
-            </div>
-        @endif
-    </x-panel>
-
     <x-panel heading="Recent alert emails">
         <x-data-table
             :headers="['When', 'Rule', 'Plate', 'Status']"
@@ -518,6 +479,83 @@ new #[Title('Security')] class extends Component {
             </x-data-table>
         </x-panel>
     </div>
+
+    <x-panel heading="Latest detections">
+        <x-data-table
+            :headers="[
+                'Time',
+                'Plate',
+                'Camera',
+                'Direction',
+                ['label' => 'Confidence', 'align' => 'right'],
+                ['label' => '', 'align' => 'right'],
+            ]"
+            :is-empty="$this->latestDetections->isEmpty()"
+            empty="No detections in the last 24 hours."
+        >
+            @foreach ($this->latestDetections as $event)
+                @php
+                    $isIn = $event->direction === PlateDirection::In;
+                    $conf = $event->confidence === null ? null : (int) round($event->confidence * 100);
+                @endphp
+                <tr wire:key="latest-detection-{{ $event->id }}">
+                    <td class="border-b border-line py-2 tabular-nums text-ink-2">
+                        {{ $event->captured_at->format('D d M · H:i') }}
+                    </td>
+                    <td class="border-b border-line py-2 font-mono font-semibold text-ink">
+                        {{ App\Support\PlateNumber::forDisplay($event->plate_number) }}
+                    </td>
+                    <td class="border-b border-line py-2 text-ink-2">
+                        {{ $event->camera?->name ?? '—' }}
+                    </td>
+                    <td class="border-b border-line py-2">
+                        @if ($event->direction === null)
+                            <span class="text-[11.5px] text-ink-muted">—</span>
+                        @else
+                            <span @class([
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]',
+                                'bg-accent-soft text-accent' => $isIn,
+                                'bg-warning-soft text-warning' => ! $isIn,
+                            ])>
+                                <flux:icon :icon="$isIn ? 'arrow-down-right' : 'arrow-up-left'" class="size-3" />
+                                {{ $isIn ? 'In' : 'Out' }}
+                            </span>
+                        @endif
+                    </td>
+                    <td class="border-b border-line py-2 text-right">
+                        @if ($conf === null)
+                            <span class="text-[11.5px] text-ink-muted">—</span>
+                        @else
+                            <span @class([
+                                'text-[11.5px] tabular-nums',
+                                'text-warning' => $conf < 85,
+                                'text-ink-2' => $conf >= 85,
+                            ])>{{ $conf }}%</span>
+                        @endif
+                    </td>
+                    <td class="border-b border-line py-2 text-right">
+                        <div class="flex items-center justify-end gap-1">
+                            @if ($event->getAttribute('capture_count') > 0)
+                                <flux:button
+                                    size="xs"
+                                    variant="ghost"
+                                    icon="photo"
+                                    wire:click="viewCaptures({{ $event->id }})"
+                                    data-test="view-captures-{{ $event->id }}"
+                                >Photos</flux:button>
+                            @endif
+                            <flux:button
+                                size="xs"
+                                variant="ghost"
+                                :href="route('vehicle', ['plate' => $event->plate_number])"
+                                wire:navigate
+                            >History</flux:button>
+                        </div>
+                    </td>
+                </tr>
+            @endforeach
+        </x-data-table>
+    </x-panel>
 
     <flux:modal wire:model.self="viewingCaptureEventId" class="md:w-[40rem]" @close="$wire.closeCaptures()">
         <div class="space-y-3">

@@ -282,3 +282,21 @@ it('lists a detection without a Photos button once the jpeg is gone', function (
         ->assertSee('NOPHOTOGP')
         ->assertDontSee('data-test="view-captures-', false);
 });
+
+it('marks a plate read from the photo and leaves a camera read unmarked', function () {
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'HW37HTGP',
+        'original_plate_number' => 'UNKNOWN',
+        'captured_at' => Date::now()->subMinutes(4),
+    ]);
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'CAM01GP',
+        'captured_at' => Date::now()->subMinutes(3),
+    ]);
+
+    Livewire::test('pages::security')
+        ->assertSee('HW37HTGP')
+        ->assertSee('CAM01GP')
+        ->assertSee('From photo')
+        ->assertSee('data-test="read-from-photo"', false);
+});

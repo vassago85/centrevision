@@ -238,3 +238,18 @@ it('watches the currently-focused plate from the header action', function () {
         ->and($entry->kind)->toBe(WatchlistKind::Watch)
         ->and($entry->site_id)->toBe($this->site->id);
 });
+
+it('marks a plate read from the photo', function () {
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'HW37HTGP',
+        'original_plate_number' => 'UNKNOWN',
+        'captured_at' => Date::now()->subHour(),
+    ]);
+
+    Livewire::test('pages::activity')
+        ->assertSee('HW37HTGP')
+        ->assertSee('From photo')
+        ->assertSee('data-test="read-from-photo"', false);
+});

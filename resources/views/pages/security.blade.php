@@ -510,8 +510,15 @@ new #[Title('Security')] class extends Component {
                     <td class="border-b border-line py-2 tabular-nums text-ink-2">
                         {{ $event->captured_at->format('D d M · H:i') }}
                     </td>
-                    <td class="border-b border-line py-2 font-mono font-semibold text-ink">
-                        {{ App\Support\PlateNumber::forDisplay($event->plate_number) }}
+                    <td class="border-b border-line py-2">
+                        <span class="inline-flex items-center gap-2">
+                            <span class="font-mono font-semibold text-ink">
+                                {{ App\Support\PlateNumber::forDisplay($event->plate_number) }}
+                            </span>
+                            @if ($event->wasReadFromImage())
+                                <x-photo-read />
+                            @endif
+                        </span>
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">
                         {{ $event->camera?->name ?? '—' }}

@@ -14,6 +14,8 @@ class PlateCapture
 {
     public readonly string $plateNumber;
 
+    public readonly ?string $originalPlateNumber;
+
     /**
      * @param  array<string, mixed>  $rawPayload
      */
@@ -23,8 +25,13 @@ class PlateCapture
         public readonly ?PlateDirection $direction = null,
         public readonly ?float $confidence = null,
         public readonly array $rawPayload = [],
+        ?string $originalPlateNumber = null,
     ) {
         $this->plateNumber = PlateNumber::normalise($plateNumber);
+        $original = $originalPlateNumber === null
+            ? null
+            : PlateNumber::normalise($originalPlateNumber);
+        $this->originalPlateNumber = $original === '' ? null : $original;
     }
 
     public function isUsable(): bool

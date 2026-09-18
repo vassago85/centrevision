@@ -2,6 +2,7 @@ FROM php:8.4-fpm-alpine
 
 # System packages: nginx + supervisor to run web, netcat to wait for the DB in
 # the entrypoint, and the toolchain we need for composer + vite.
+# python3, opencv and tesseract read plate JPEGs the camera marked unknown.
 RUN apk add --no-cache \
     nginx \
     supervisor \
@@ -21,7 +22,11 @@ RUN apk add --no-cache \
     nodejs \
     npm \
     ca-certificates \
-    tzdata
+    tzdata \
+    python3 \
+    py3-opencv \
+    tesseract-ocr \
+    tesseract-ocr-data-eng
 
 # Everything the app renders (schedules, logs, mailables) uses SAST.
 ENV TZ=Africa/Johannesburg

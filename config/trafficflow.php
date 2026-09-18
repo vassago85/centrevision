@@ -31,6 +31,13 @@ return [
     // since short strings are one edit away from far too much.
     'fuzzy_match_min_length' => 5,
 
+    // When the camera sends "unknown", read the attached JPEG ourselves.
+    // A result under this confidence is discarded — a wrong plate is worse
+    // than no plate.
+    'plate_image_read_enabled' => (bool) env('TRAFFICFLOW_PLATE_IMAGE_READ_ENABLED', true),
+    'plate_image_read_min_confidence' => 0.7,
+    'plate_image_read_python' => env('TRAFFICFLOW_PLATE_IMAGE_READ_PYTHON', 'python3'),
+
     'alert_stream' => [
         'timeout' => (int) env('TRAFFICFLOW_ALERT_STREAM_TIMEOUT', 0),
         'connect_timeout' => 10,

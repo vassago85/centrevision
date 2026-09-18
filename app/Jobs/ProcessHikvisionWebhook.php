@@ -6,7 +6,10 @@ use App\Models\Camera;
 use App\Models\Scopes\SiteScope;
 use App\Services\Ingestion\HikvisionAttachment;
 use App\Services\Ingestion\HikvisionWebhookParser;
+use App\Services\Ingestion\PlateCapture;
 use App\Services\Ingestion\PlateEventRecorder;
+use App\Services\Ingestion\PlateImageReader;
+use App\Support\PlateNumber;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -44,7 +47,7 @@ class ProcessHikvisionWebhook implements ShouldQueue
         public string $receivedAt,
     ) {}
 
-    public function handle(HikvisionWebhookParser $parser, PlateEventRecorder $recorder): void
+    public function handle(HikvisionWebhookParser $parser, PlateEventRecorder $recorder, PlateImageReader $plates): void
     {
         $disk = Storage::disk('local');
 
@@ -108,13 +111,52 @@ class ProcessHikvisionWebhook implements ShouldQueue
             return;
         }
 
-        $plateEvent = $recorder->record($camera, $event->capture);
+        $capture = $this->recoverUnknownPlate($event->capture, $event->attachments, $plates);
+        $plateEvent = $recorder->record($camera, $capture);
 
         if ($plateEvent !== null && $event->attachments !== []) {
             $this->storeAttachments($camera, $plateEvent->getKey(), $event->attachments);
         }
 
         $disk->delete($this->inboxKey);
+    }
+
+    /**
+     * The camera said it could not read the plate. The JPEG is still in the
+     * same post, so try that before the row is stored. A miss leaves the
+     * capture as UNKNOWN.
+     *
+     * @param  list<HikvisionAttachment>  $attachments
+     */
+    protected function recoverUnknownPlate(PlateCapture $capture, array $attachments, PlateImageReader $plates): PlateCapture
+    {
+        if (! PlateNumber::isUnknown($capture->plateNumber) || $attachments === []) {
+            return $capture;
+        }
+
+        try {
+            $read = $plates->read($attachments);
+        } catch (\Throwable $e) {
+            Log::warning('Plate image read failed', [
+                'camera_id' => $this->cameraId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $capture;
+        }
+
+        if ($read === null) {
+            return $capture;
+        }
+
+        return new PlateCapture(
+            plateNumber: $read->plate,
+            capturedAt: $capture->capturedAt,
+            direction: $capture->direction,
+            confidence: $read->confidence,
+            rawPayload: $capture->rawPayload,
+            originalPlateNumber: $capture->plateNumber,
+        );
     }
 
     /**

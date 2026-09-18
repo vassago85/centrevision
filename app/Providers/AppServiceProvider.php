@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Http\Middleware\EnsureSubscriptionActive;
 use App\Http\Middleware\EnsureTenantContext;
+use App\Services\Ingestion\PlateImageReader;
+use App\Services\Ingestion\TesseractPlateImageReader;
 use App\Support\Billing\Gateway\FakePaymentGateway;
 use App\Support\Billing\Gateway\PaymentGateway;
 use App\Support\Billing\Gateway\PaystackGateway;
@@ -31,6 +33,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(Tenancy::class);
         $this->app->scoped(Impersonation::class);
+        $this->app->singleton(PlateImageReader::class, TesseractPlateImageReader::class);
 
         $this->registerPaymentGateway();
     }

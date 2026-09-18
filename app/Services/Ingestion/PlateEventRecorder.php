@@ -43,6 +43,11 @@ class PlateEventRecorder
         }
 
         $direction = $capture->direction ?? $camera->role->impliedDirection();
+        $original = $corrected !== $plate ? $plate : $capture->originalPlateNumber;
+
+        if ($original === $corrected) {
+            $original = null;
+        }
 
         try {
             $event = PlateEvent::query()->withoutGlobalScope(SiteScope::class)->create([
@@ -52,7 +57,7 @@ class PlateEventRecorder
                 'captured_at' => $capture->capturedAt,
                 'confidence' => $capture->confidence,
                 'raw_payload' => $capture->rawPayload ?: null,
-                'original_plate_number' => $corrected === $plate ? null : $plate,
+                'original_plate_number' => $original,
             ]);
         } catch (UniqueConstraintViolationException) {
             // The two ingestion paths raced for the same capture.

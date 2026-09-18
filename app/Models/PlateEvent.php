@@ -113,6 +113,17 @@ class PlateEvent extends Model implements SiteScoped
     public function wasFuzzyCorrected(): bool
     {
         return $this->original_plate_number !== null
-            && $this->original_plate_number !== $this->plate_number;
+            && $this->original_plate_number !== $this->plate_number
+            && ! $this->wasReadFromImage();
+    }
+
+    /**
+     * True when the camera sent no plate and the platform read one from the
+     * attached JPEG. The camera text is kept as UNKNOWN so the desk can tell
+     * the two apart.
+     */
+    public function wasReadFromImage(): bool
+    {
+        return $this->original_plate_number === 'UNKNOWN';
     }
 }

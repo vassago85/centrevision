@@ -9,6 +9,8 @@ use App\Models\Scopes\SiteScope;
 use App\Models\Site;
 use App\Services\Ingestion\PlateCapture;
 use App\Services\Ingestion\PlateEventRecorder;
+use App\Services\Ingestion\PlateImageRead;
+use App\Services\Ingestion\PlateImageReader;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
@@ -334,4 +336,69 @@ it('cleans the staged file from the inbox after a successful record', function (
     $inboxFiles = Storage::disk('local')->allFiles(HikvisionWebhookController::INBOX_DIR);
 
     expect($inboxFiles)->toBeEmpty();
+});
+
+it('reads the attached photo when the camera plate is unknown', function () {
+    app()->instance(PlateImageReader::class, new class implements PlateImageReader
+    {
+        public function read(array $attachments): ?PlateImageRead
+        {
+            return new PlateImageRead('HW37HTGP', 0.91);
+        }
+    });
+
+    postHikWebhook(
+        $this->camera,
+        hikMultipart(
+            xml: hikXml(plate: 'unknown'),
+            images: [
+                ['content_type' => 'image/jpeg', 'filename' => 'detectionPicture.jpg', 'bytes' => 'scene'],
+            ],
+        ),
+        'multipart/form-data; boundary=MIME_boundary_ANPR',
+    )->assertOk();
+
+    $event = PlateEvent::withoutGlobalScope(SiteScope::class)->sole();
+
+    expect($event->plate_number)->toBe('HW37HTGP')
+        ->and($event->original_plate_number)->toBe('UNKNOWN')
+        ->and($event->confidence)->toBe(0.91);
+});
+
+it('does not replace a plate the camera already read', function () {
+    app()->instance(PlateImageReader::class, new class implements PlateImageReader
+    {
+        public function read(array $attachments): ?PlateImageRead
+        {
+            return new PlateImageRead('HW37HTGP', 0.99);
+        }
+    });
+
+    postHikWebhook(
+        $this->camera,
+        hikMultipart(
+            xml: hikXml(plate: 'JD45GP'),
+            images: [
+                ['content_type' => 'image/jpeg', 'filename' => 'detectionPicture.jpg', 'bytes' => 'scene'],
+            ],
+        ),
+        'multipart/form-data; boundary=MIME_boundary_ANPR',
+    )->assertOk();
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->sole()->plate_number)->toBe('JD45GP');
+});
+
+it('keeps unknown when the photo cannot be read', function () {
+    postHikWebhook(
+        $this->camera,
+        hikMultipart(
+            xml: hikXml(plate: 'unknown'),
+            images: [
+                ['content_type' => 'image/jpeg', 'filename' => 'detectionPicture.jpg', 'bytes' => 'not-a-jpeg'],
+            ],
+        ),
+        'multipart/form-data; boundary=MIME_boundary_ANPR',
+    )->assertOk();
+
+    expect(PlateEvent::withoutGlobalScope(SiteScope::class)->sole()->plate_number)->toBe('UNKNOWN');
 });

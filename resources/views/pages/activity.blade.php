@@ -433,11 +433,16 @@ new #[Title('Activity')] class extends Component
                         {{ $event->captured_at->format('D d M · H:i') }}
                     </td>
                     <td class="border-b border-line py-2">
-                        <button
-                            type="button"
-                            wire:click="focusOnPlate('{{ $event->plate_number }}')"
-                            class="font-mono font-semibold text-ink hover:text-accent"
-                        >{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</button>
+                        <span class="inline-flex items-center gap-2">
+                            <button
+                                type="button"
+                                wire:click="focusOnPlate('{{ $event->plate_number }}')"
+                                class="font-mono font-semibold text-ink hover:text-accent"
+                            >{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</button>
+                            @if ($event->wasReadFromImage())
+                                <x-photo-read />
+                            @endif
+                        </span>
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">
                         {{ $event->camera?->name ?? '—' }}

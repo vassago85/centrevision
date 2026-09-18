@@ -14,6 +14,17 @@ import tempfile
 
 import cv2
 
+# Hikvision burns capture metadata (date, plate, colour) as an overlay along
+# the bottom of scene images. Those big printed characters are much easier to
+# OCR than the actual plate on the car, so tesseract steals the result. We
+# strip that band off before anything else looks at the frame.
+OVERLAY_STRIP_FRACTION = 0.2
+
+# Character height tesseract really wants. A plate in a Hikvision crop is
+# often 20-30 px tall; we upscale each candidate to several targets so the
+# right one is in the batch.
+OCR_HEIGHTS = (64, 96, 128, 160)
+
 
 def main() -> None:
     if len(sys.argv) != 2:
@@ -37,26 +48,27 @@ def main() -> None:
 
 def best_read(image):
     height, width = image.shape[:2]
+    scene = width > 900
+
+    if scene:
+        keep = max(int(height * (1 - OVERLAY_STRIP_FRACTION)), 1)
+        image = image[:keep]
+        height, width = image.shape[:2]
+
     aspect = width / max(height, 1)
     best = None
 
-    # A plate close-up is already the crop. A scene photo is not.
+    # A tight plate close-up: the whole image is the plate.
     if width <= 900 and 1.6 <= aspect <= 8:
+        best = better(best, ocr(image))
+
+    # A vehicle crop (small, roughly square). Try the whole thing plus each
+    # rectangle that looks like a plate.
+    if width <= 900 and aspect < 1.6:
         best = better(best, ocr(image))
 
     for crop in plate_regions(image):
         best = better(best, ocr(crop))
-
-    # Rear plates sit low and centred. The camera's own engine misses them
-    # when the car is angled, but the characters are often still in this band.
-    if width > 900:
-        y0 = int(height * 0.45)
-        x0 = int(width * 0.15)
-        x1 = int(width * 0.85)
-        band = image[y0:height, x0:x1]
-        best = better(best, ocr(band, psm="11"))
-        for crop in plate_regions(band):
-            best = better(best, ocr(crop))
 
     return best
 
@@ -70,11 +82,17 @@ def better(current, candidate):
 
 
 def plate_regions(image):
+    """Find rectangles that look like plates and return them, largest first."""
     height, width = image.shape[:2]
-    scale = 1280 / max(width, 1)
     working = image
-    if scale < 1:
-        working = cv2.resize(image, (int(width * scale), int(height * scale)))
+    # Scale small images up so the morphology kernel has room to work; scale
+    # very large ones down so we do not spend seconds on background clutter.
+    if width < 800:
+        factor = 800 / max(width, 1)
+        working = cv2.resize(image, (int(width * factor), int(height * factor)))
+    elif width > 1280:
+        factor = 1280 / max(width, 1)
+        working = cv2.resize(image, (int(width * factor), int(height * factor)))
 
     gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 5))
@@ -99,8 +117,8 @@ def plate_regions(image):
         ratio = crop_w / float(crop_h)
         if ratio < 1.8 or ratio > 7.5:
             continue
-        pad_x = int(crop_w * 0.08)
-        pad_y = int(crop_h * 0.3)
+        pad_x = int(crop_w * 0.1)
+        pad_y = int(crop_h * 0.35)
         x0 = max(x - pad_x, 0)
         y0 = max(y - pad_y, 0)
         x1 = min(x + crop_w + pad_x, frame_w)
@@ -112,17 +130,34 @@ def plate_regions(image):
     return [crop for _area, crop in regions[:8]]
 
 
-def ocr(crop, psm="7"):
+def ocr(crop):
+    """Read one candidate region. Tries several scales and PSM modes so a
+    borderline character height is not the reason we miss the plate.
+    """
     if crop is None or crop.size == 0:
         return None
 
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
-    height, width = gray.shape[:2]
-    if height < 64:
-        factor = 64 / max(height, 1)
-        gray = cv2.resize(gray, (max(int(width * factor), 1), 64), interpolation=cv2.INTER_CUBIC)
     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
 
+    best = None
+    for target_height in OCR_HEIGHTS:
+        variant = _resize_to_height(gray, target_height)
+        for psm in ("7", "8"):
+            best = _better(best, _run_tesseract(variant, psm))
+    return best
+
+
+def _resize_to_height(gray, target_height):
+    height, width = gray.shape[:2]
+    if height == 0:
+        return gray
+    factor = target_height / height
+    new_width = max(int(width * factor), 1)
+    return cv2.resize(gray, (new_width, target_height), interpolation=cv2.INTER_CUBIC)
+
+
+def _run_tesseract(gray, psm):
     handle, path = tempfile.mkstemp(suffix=".png")
     os.close(handle)
     try:
@@ -153,6 +188,14 @@ def ocr(crop, psm="7"):
             pass
 
     return best_line(completed.stdout)
+
+
+def _better(current, candidate):
+    if candidate is None:
+        return current
+    if current is None or candidate[1] > current[1]:
+        return candidate
+    return current
 
 
 def best_line(tsv: str):

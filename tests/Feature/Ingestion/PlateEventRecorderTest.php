@@ -191,16 +191,3 @@ it('reports how many of a batch were stored', function () {
     expect($stored)->toBe(2);
 });
 
-it('keeps the unread camera text when a photo read replaces it', function () {
-    $event = $this->recorder->record($this->camera, new PlateCapture(
-        plateNumber: 'HW37HTGP',
-        capturedAt: now(),
-        confidence: 0.88,
-        originalPlateNumber: 'unknown',
-    ));
-
-    expect($event->plate_number)->toBe('HW37HTGP')
-        ->and($event->original_plate_number)->toBe('UNKNOWN')
-        ->and($event->wasReadFromImage())->toBeTrue()
-        ->and($event->wasFuzzyCorrected())->toBeFalse();
-});

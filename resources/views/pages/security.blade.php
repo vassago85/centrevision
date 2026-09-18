@@ -515,9 +515,6 @@ new #[Title('Security')] class extends Component {
                             <span class="font-mono font-semibold text-ink">
                                 {{ App\Support\PlateNumber::forDisplay($event->plate_number) }}
                             </span>
-                            @if ($event->wasReadFromImage())
-                                <x-photo-read />
-                            @endif
                         </span>
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">

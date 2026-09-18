@@ -439,9 +439,6 @@ new #[Title('Activity')] class extends Component
                                 wire:click="focusOnPlate('{{ $event->plate_number }}')"
                                 class="font-mono font-semibold text-ink hover:text-accent"
                             >{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</button>
-                            @if ($event->wasReadFromImage())
-                                <x-photo-read />
-                            @endif
                         </span>
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">

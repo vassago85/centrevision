@@ -24,7 +24,8 @@ return [
     // treated as one event.
     'dedupe_window_seconds' => (int) env('TRAFFICFLOW_DEDUPE_WINDOW_SECONDS', 20),
 
-    // Correct single-character OCR misreads against plates already on site.
+    // Correct a one-character OCR miss (substitution, drop, or extra
+    // character) against a plate already on site.
     'fuzzy_match_enabled' => (bool) env('TRAFFICFLOW_FUZZY_MATCH_ENABLED', true),
 
     // Only consider a fuzzy correction for plates of at least this length,

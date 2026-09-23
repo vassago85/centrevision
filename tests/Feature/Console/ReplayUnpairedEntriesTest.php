@@ -50,6 +50,36 @@ it('re-pairs an entry that was stamped processed but never became a visit', func
         ->and($visits[1]->status)->toBe(VisitStatus::Open);
 });
 
+it('closes an open visit from an exit the old matcher left unmatched', function () {
+    $exitCamera = Camera::factory()->for($this->site)->exit()->create();
+
+    $entry = PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'MX06KHGP',
+        'direction' => PlateDirection::In,
+        'captured_at' => now()->subHour(),
+        'processed_at' => now()->subHour(),
+    ]);
+
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'MX06KHGP',
+        'entry_event_id' => $entry->id,
+        'entered_at' => $entry->captured_at,
+        'status' => VisitStatus::Open,
+    ]);
+
+    PlateEvent::factory()->for($exitCamera)->create([
+        'plate_number' => 'M06KHGP',
+        'direction' => PlateDirection::Out,
+        'captured_at' => now()->subMinutes(10),
+        'processed_at' => now()->subMinutes(10),
+    ]);
+
+    $this->artisan('visits:replay-unpaired')->assertSuccessful();
+
+    expect(Visit::query()->sole()->status)->toBe(VisitStatus::Closed)
+        ->and(Visit::query()->sole()->plate_number)->toBe('MX06KHGP');
+});
+
 it('leaves paired entries alone', function () {
     $entry = PlateEvent::factory()->for($this->entrance)->create([
         'plate_number' => 'PAIRED01',

@@ -830,7 +830,7 @@ new #[Title('Reports')] class extends Component {
                 {{ $this->quality['pairing_quality'] === null ? '—' : $this->quality['pairing_quality'].'%' }}
             </p>
             <p class="mt-2 text-[13px] text-ink-2">
-                {{ number_format($this->quality['reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
+                {{ number_format($this->quality['pairable_reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
                 · {{ number_format($this->quality['unmatched_reads']) }} unmatched reads
             </p>
         </x-panel-card>
@@ -1137,7 +1137,7 @@ new #[Title('Reports')] class extends Component {
                 {{ $this->quality['pairing_quality'] === null ? '—' : $this->quality['pairing_quality'].'%' }}
             </p>
             <p class="mt-2 text-[13px] text-ink-2">
-                {{ number_format($this->quality['reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
+                {{ number_format($this->quality['pairable_reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
                 · {{ number_format($this->quality['unmatched_reads']) }} unmatched reads
             </p>
         </x-panel-card>

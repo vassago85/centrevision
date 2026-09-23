@@ -31,11 +31,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float|null $confidence
  * @property array<string, mixed>|null $raw_payload
  * @property CarbonInterface|null $processed_at
+ * @property int|null $superseded_by_event_id
  * @property string|null $original_plate_number
  */
 #[Fillable([
     'camera_id', 'plate_number', 'direction', 'captured_at',
-    'confidence', 'raw_payload', 'processed_at', 'original_plate_number',
+    'confidence', 'raw_payload', 'processed_at', 'superseded_by_event_id',
+    'original_plate_number',
 ])]
 #[ScopedBy(SiteScope::class)]
 #[UsePolicy(PlateDataPolicy::class)]

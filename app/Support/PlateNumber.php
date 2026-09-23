@@ -62,15 +62,15 @@ class PlateNumber
 
     /**
      * Whether two plates are close enough to be the same vehicle misread by the
-     * OCR. Only single-character substitutions on plates of a reasonable length
-     * qualify, since short strings collide far too easily.
+     * OCR. One substituted, dropped, or extra character qualifies, on plates
+     * long enough that a single edit is unlikely to be a different vehicle.
      */
     public static function isProbableMisread(string $candidate, string $known): bool
     {
         $candidate = static::normalise($candidate);
         $known = static::normalise($known);
 
-        if ($candidate === $known) {
+        if ($candidate === $known || static::isUnknown($candidate) || static::isUnknown($known)) {
             return false;
         }
 
@@ -80,9 +80,9 @@ class PlateNumber
             return false;
         }
 
-        // Different lengths would mean a dropped or extra character, which is a
-        // far weaker signal than a substitution, so require equal length.
-        if (strlen($candidate) !== strlen($known)) {
+        // One insert or delete changes the length by 1. Two edits, or a
+        // longer gap, is a different vehicle.
+        if (abs(strlen($candidate) - strlen($known)) > 1) {
             return false;
         }
 

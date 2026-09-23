@@ -97,6 +97,15 @@ it('does not dedupe the same plate seen on a different camera', function () {
     expect(PlateEvent::query()->count())->toBe(2);
 });
 
+it('attributes a dropped character to the vehicle already on site', function () {
+    Visit::factory()->for($this->site)->plateNumber('MX06KHGP')->open(now()->subHour())->create();
+
+    $event = $this->recorder->record($this->camera, capture('M06KHGP'));
+
+    expect($event->plate_number)->toBe('MX06KHGP')
+        ->and($event->original_plate_number)->toBe('M06KHGP');
+});
+
 it('attributes a one-character misread to the vehicle already on site', function () {
     Visit::factory()->for($this->site)->plateNumber('JD45GP')->open(now()->subHour())->create();
 
@@ -190,4 +199,3 @@ it('reports how many of a batch were stored', function () {
 
     expect($stored)->toBe(2);
 });
-

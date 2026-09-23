@@ -68,8 +68,51 @@ it('reports pairing quality from reads and closed visits', function () {
     $summary = $this->quality->summary($this->range);
 
     expect($summary['reads'])->toBe(3)
+        ->and($summary['pairable_reads'])->toBe(3)
         ->and($summary['paired_visits'])->toBe(1)
         ->and($summary['orphan_entries'])->toBe(1)
         ->and($summary['pairing_quality'])->toBe(66.7)
         ->and($summary['cameras_offline'])->toBe(1);
+});
+
+it('leaves unknown reads and repeat photos out of the pairing ratio', function () {
+    $entry = PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'JD45GP',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->subHours(2),
+    ]);
+    $exit = PlateEvent::factory()->for($this->exit)->create([
+        'plate_number' => 'JD45GP',
+        'direction' => PlateDirection::Out,
+        'captured_at' => Date::now()->subHour(),
+    ]);
+    PlateEvent::factory()->for($this->exit)->create([
+        'plate_number' => 'JD46GP',
+        'direction' => PlateDirection::Out,
+        'captured_at' => Date::now()->subHour()->addSeconds(2),
+        'superseded_by_event_id' => $exit->id,
+    ]);
+    PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'UNKNOWN',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->subMinutes(20),
+    ]);
+
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'JD45GP',
+        'entry_event_id' => $entry->id,
+        'exit_event_id' => $exit->id,
+        'entered_at' => $entry->captured_at,
+        'exited_at' => $exit->captured_at,
+        'dwell_minutes' => 60,
+        'status' => VisitStatus::Closed,
+    ]);
+
+    $summary = $this->quality->summary($this->range);
+
+    expect($summary['reads'])->toBe(4)
+        ->and($summary['pairable_reads'])->toBe(2)
+        ->and($summary['pairing_quality'])->toBe(100.0)
+        ->and($summary['unmatched_reads'])->toBe(0)
+        ->and($summary['orphan_exits'])->toBe(0);
 });

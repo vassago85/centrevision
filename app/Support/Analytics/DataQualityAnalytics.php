@@ -7,6 +7,8 @@ use App\Enums\VisitStatus;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Visit;
+use App\Support\PlateNumber;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
@@ -20,6 +22,7 @@ class DataQualityAnalytics
     /**
      * @return array{
      *   reads: int,
+     *   pairable_reads: int,
      *   entries: int,
      *   exits: int,
      *   paired_visits: int,
@@ -36,6 +39,14 @@ class DataQualityAnalytics
     {
         $reads = PlateEvent::query()
             ->whereBetween('captured_at', [$range->from, $range->to])
+            ->count();
+
+        // Pairing quality answers "of the reads that could become a visit,
+        // how many did". A failed OCR, a camera that sent no direction, and
+        // a second photo of a drive-through already counted are not failures.
+        $pairable = PlateEvent::query()
+            ->whereBetween('captured_at', [$range->from, $range->to])
+            ->where(fn (Builder $query) => $this->pairable($query))
             ->count();
 
         $entries = PlateEvent::query()
@@ -61,6 +72,7 @@ class DataQualityAnalytics
         $orphanExits = PlateEvent::query()
             ->where('direction', PlateDirection::Out)
             ->whereBetween('captured_at', [$range->from, $range->to])
+            ->where(fn (Builder $query) => $this->pairable($query))
             ->whereNotExists(function ($sub): void {
                 $sub->selectRaw('1')
                     ->from('visits')
@@ -74,13 +86,14 @@ class DataQualityAnalytics
 
         return [
             'reads' => $reads,
+            'pairable_reads' => $pairable,
             'entries' => $entries,
             'exits' => $exits,
             'paired_visits' => $paired,
             'orphan_entries' => $orphanEntries,
             'orphan_exits' => $orphanExits,
-            'pairing_quality' => $reads > 0 ? round(($paired * 2) / $reads * 100, 1) : null,
-            'unmatched_reads' => max(0, $reads - ($paired * 2)),
+            'pairing_quality' => $pairable > 0 ? round(($paired * 2) / $pairable * 100, 1) : null,
+            'unmatched_reads' => max(0, $pairable - ($paired * 2)),
             'camera_uptime' => $total > 0 ? round((($total - $offline) / $total) * 100, 1) : null,
             'cameras_offline' => $offline,
             'cameras_total' => $total,
@@ -111,5 +124,17 @@ class DataQualityAnalytics
         }
 
         return $days;
+    }
+
+    /**
+     * Reads that matching is allowed to turn into a visit.
+     *
+     * @param  Builder<PlateEvent>  $query
+     */
+    protected function pairable(Builder $query): void
+    {
+        $query->whereNotNull('direction')
+            ->where('plate_number', '!=', PlateNumber::normalise('unknown'))
+            ->whereNull('superseded_by_event_id');
     }
 }

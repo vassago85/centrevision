@@ -18,8 +18,9 @@ use Illuminate\Support\Facades\Log;
  *
  * Two things happen here that must not be duplicated elsewhere: dedupe, so a
  * capture arriving on both the alert stream and the FTP sweep is stored once,
- * and fuzzy correction, so a single-character OCR misread is attributed to the
- * vehicle already on site rather than treated as a new plate.
+ * and fuzzy correction, so an OCR miss of one character, or two when nothing
+ * is closer, is attributed to the vehicle already on site rather than
+ * treated as a new plate.
  */
 class PlateEventRecorder
 {
@@ -99,8 +100,8 @@ class PlateEventRecorder
     }
 
     /**
-     * If this plate is one character away from a vehicle currently on site,
-     * assume the OCR misread and attribute the capture to the known plate.
+     * If this plate is one or two characters away from a vehicle currently on
+     * site, assume the OCR misread and attribute the capture to the known plate.
      * Anything else would open a second visit and orphan the first.
      */
     protected function correctMisread(Camera $camera, string $plate, PlateCapture $capture): string
@@ -131,17 +132,15 @@ class PlateEventRecorder
             ->pluck('plate_number')
             ->unique();
 
-        $matches = $candidates
-            ->filter(fn (string $known) => PlateNumber::isProbableMisread($plate, $known))
-            ->values();
+        $chosen = PlateNumber::closestPlate($plate, $candidates);
 
-        // Two equally plausible corrections mean we cannot pick safely, so
-        // keep the plate as read and let it stand on its own.
-        if ($matches->count() !== 1) {
+        // Exact already returned above. A tie at the closest distance, or no
+        // plate within two characters, leaves the read unchanged.
+        if ($chosen === null || $chosen === $plate) {
             return $plate;
         }
 
-        return $matches->first();
+        return $chosen;
     }
 
     /**

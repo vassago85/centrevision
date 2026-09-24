@@ -24,9 +24,13 @@ return [
     // treated as one event.
     'dedupe_window_seconds' => (int) env('TRAFFICFLOW_DEDUPE_WINDOW_SECONDS', 20),
 
-    // Correct a one-character OCR miss (substitution, drop, or extra
-    // character) against a plate already on site.
+    // Correct an OCR miss of one or two characters (substitution, drop, or
+    // extra character) against a plate already on site. Camera confidence
+    // is not consulted: a high score only means the camera is sure of the
+    // characters it chose.
     'fuzzy_match_enabled' => (bool) env('TRAFFICFLOW_FUZZY_MATCH_ENABLED', true),
+
+    'fuzzy_match_max_edits' => 2,
 
     // Only consider a fuzzy correction for plates of at least this length,
     // since short strings are one edit away from far too much.

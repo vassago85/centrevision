@@ -62,30 +62,83 @@ class PlateNumber
 
     /**
      * Whether two plates are close enough to be the same vehicle misread by the
-     * OCR. One substituted, dropped, or extra character qualifies, on plates
-     * long enough that a single edit is unlikely to be a different vehicle.
+     * OCR. Up to two substituted, dropped, or extra characters qualify, on
+     * plates long enough that those edits are unlikely to be a different
+     * vehicle. Camera confidence is ignored.
      */
     public static function isProbableMisread(string $candidate, string $known): bool
+    {
+        $distance = static::editDistance($candidate, $known);
+
+        return $distance !== null && $distance >= 1;
+    }
+
+    /**
+     * The known plate to trust for this read.
+     *
+     * An exact plate wins. Otherwise the unique plate one character away wins.
+     * A two-character plate is used only when nothing is closer. Two plates at
+     * the same distance is not a match.
+     *
+     * @param  iterable<int, string>  $knownPlates
+     */
+    public static function closestPlate(string $candidate, iterable $knownPlates): ?string
+    {
+        $byDistance = [];
+
+        foreach ($knownPlates as $known) {
+            $distance = static::editDistance($candidate, (string) $known);
+
+            if ($distance === null) {
+                continue;
+            }
+
+            $byDistance[$distance][static::normalise($known)] = static::normalise($known);
+        }
+
+        ksort($byDistance);
+
+        foreach ($byDistance as $plates) {
+            if (count($plates) === 1) {
+                return array_values($plates)[0];
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Edit distance between two plates, or null when they must not be compared.
+     * Zero is an exact plate. Camera confidence is ignored.
+     */
+    public static function editDistance(string $candidate, string $known): ?int
     {
         $candidate = static::normalise($candidate);
         $known = static::normalise($known);
 
-        if ($candidate === $known || static::isUnknown($candidate) || static::isUnknown($known)) {
-            return false;
+        if ($candidate === '' || $known === '' || static::isUnknown($candidate) || static::isUnknown($known)) {
+            return null;
+        }
+
+        if ($candidate === $known) {
+            return 0;
         }
 
         $minLength = (int) config('trafficflow.fuzzy_match_min_length', 5);
+        $maxEdits = (int) config('trafficflow.fuzzy_match_max_edits', 2);
 
         if (strlen($candidate) < $minLength || strlen($known) < $minLength) {
-            return false;
+            return null;
         }
 
-        // One insert or delete changes the length by 1. Two edits, or a
-        // longer gap, is a different vehicle.
-        if (abs(strlen($candidate) - strlen($known)) > 1) {
-            return false;
+        if (abs(strlen($candidate) - strlen($known)) > $maxEdits) {
+            return null;
         }
 
-        return levenshtein($candidate, $known) === 1;
+        $distance = levenshtein($candidate, $known);
+
+        return $distance <= $maxEdits ? $distance : null;
     }
 }

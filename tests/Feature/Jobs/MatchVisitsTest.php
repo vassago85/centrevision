@@ -106,6 +106,27 @@ it('pairs an exit that dropped one character from the entry plate', function () 
         ->and(Visit::query()->sole()->plate_number)->toBe('MX06KHGP');
 });
 
+it('pairs an exit that is two characters off the entry', function () {
+    PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subHour())->create();
+    PlateEvent::factory()->for($this->exit)->plateNumber('JD46NP')->exiting(now()->subMinutes(10))->create();
+
+    MatchVisits::dispatchSync();
+
+    expect(Visit::query()->sole()->status)->toBe(VisitStatus::Closed)
+        ->and(Visit::query()->sole()->plate_number)->toBe('JD45GP');
+});
+
+it('closes the one-character visit when a two-character visit is also open', function () {
+    PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subHour())->create();
+    PlateEvent::factory()->for($this->entrance)->plateNumber('JD47NP')->entering(now()->subMinutes(50))->create();
+    PlateEvent::factory()->for($this->exit)->plateNumber('JD46GP')->exiting(now()->subMinutes(10))->create();
+
+    MatchVisits::dispatchSync();
+
+    expect(Visit::query()->where('plate_number', 'JD45GP')->sole()->status)->toBe(VisitStatus::Closed)
+        ->and(Visit::query()->where('plate_number', 'JD47NP')->sole()->status)->toBe(VisitStatus::Open);
+});
+
 it('does not guess when two open plates are one character from the exit', function () {
     PlateEvent::factory()->for($this->entrance)->plateNumber('JD45GP')->entering(now()->subHour())->create();
     PlateEvent::factory()->for($this->entrance)->plateNumber('JD47GP')->entering(now()->subMinutes(50))->create();

@@ -147,10 +147,26 @@ it('will not correct plates shorter than the minimum length', function () {
     expect($this->recorder->record($this->camera, capture('JD46GP'))->plate_number)->toBe('JD46GP');
 });
 
-it('will not correct when two characters differ', function () {
+it('attributes a two-character misread to the vehicle already on site', function () {
     Visit::factory()->for($this->site)->plateNumber('JD45GP')->open(now()->subHour())->create();
 
-    expect($this->recorder->record($this->camera, capture('JD46NP'))->plate_number)->toBe('JD46NP');
+    $event = $this->recorder->record($this->camera, capture('JD46NP'));
+
+    expect($event->plate_number)->toBe('JD45GP')
+        ->and($event->original_plate_number)->toBe('JD46NP');
+});
+
+it('corrects to the one-character plate when a two-character plate is also on site', function () {
+    Visit::factory()->for($this->site)->plateNumber('JD45GP')->open(now()->subHour())->create();
+    Visit::factory()->for($this->site)->plateNumber('JD47NP')->open(now()->subMinutes(50))->create();
+
+    expect($this->recorder->record($this->camera, capture('JD46GP'))->plate_number)->toBe('JD45GP');
+});
+
+it('will not correct when three characters differ', function () {
+    Visit::factory()->for($this->site)->plateNumber('JD45GP')->open(now()->subHour())->create();
+
+    expect($this->recorder->record($this->camera, capture('JD99NP'))->plate_number)->toBe('JD99NP');
 });
 
 it('respects the fuzzy matching switch', function () {

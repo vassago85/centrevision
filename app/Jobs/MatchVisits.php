@@ -232,8 +232,10 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
      * rather than guessed at: it is usually the tail of a visit that began
      * before the camera was installed.
      *
-     * A one-character OCR miss still closes the visit, but only when a single
-     * open plate is that close — two candidates means we cannot pick safely.
+     * An exact plate closes the visit. Otherwise the unique open plate one
+     * character away does. A two-character miss is used only when nothing is
+     * closer. Two plates at the same distance are left open. Camera
+     * confidence does not decide this.
      * A second photo of a departure that just closed is marked superseded so
      * it does not show up as an orphan exit.
      */
@@ -263,7 +265,7 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * The one open visit whose plate is a single OCR edit from this exit.
+     * The closest open visit to this exit: exact, then one character, then two.
      */
     protected function fuzzyOpenVisit(Site $site, PlateEvent $event): ?Visit
     {
@@ -271,17 +273,15 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             return null;
         }
 
-        $matches = $this->openVisitQuery($site)
+        $open = $this->openVisitQuery($site)
             ->where('entered_at', '<=', $event->captured_at)
-            ->get()
-            ->filter(fn (Visit $visit): bool => PlateNumber::isProbableMisread($event->plate_number, $visit->plate_number))
-            ->values();
+            ->get();
 
-        return $matches->count() === 1 ? $matches->first() : null;
+        return $this->closestVisit($event->plate_number, $open);
     }
 
     /**
-     * An entrance read one edit away from a visit that opened in the
+     * An entrance read one or two edits away from a visit that opened in the
      * dedupe window is the same drive-through seen by a second camera.
      */
     protected function recentMisreadEntry(Site $site, PlateEvent $event): ?Visit
@@ -295,17 +295,15 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
         $matches = $this->openVisitQuery($site)
             ->where('entered_at', '>=', $since)
             ->where('entered_at', '<=', $event->captured_at)
-            ->get()
-            ->filter(fn (Visit $visit): bool => PlateNumber::isProbableMisread($event->plate_number, $visit->plate_number))
-            ->values();
+            ->get();
 
-        return $matches->count() === 1 ? $matches->first() : null;
+        return $this->closestVisit($event->plate_number, $matches);
     }
 
     /**
      * The exit event that already closed this departure, when this read is
      * another photo of it. Exact plate matches across cameras for the same
-     * window as a double entrance. A one-character miss only counts on the
+     * window as a double entrance. A one- or two-character miss only counts on the
      * same camera inside the short dedupe burst, so a different vehicle
      * leaving a minute later is not swallowed.
      */
@@ -356,11 +354,26 @@ class MatchVisits implements ShouldBeUnique, ShouldQueue
             ->filter(fn (Visit $visit): bool => $sameCameraExitIds->contains($visit->exit_event_id))
             ->values();
 
-        if ($matched->count() !== 1) {
+        $visit = $this->closestVisit($event->plate_number, $matched);
+
+        return $visit === null ? null : (int) $visit->exit_event_id;
+    }
+
+    /**
+     * @param  iterable<int, Visit>  $visits
+     */
+    protected function closestVisit(string $plate, iterable $visits): ?Visit
+    {
+        $visits = collect($visits);
+        $chosen = PlateNumber::closestPlate($plate, $visits->pluck('plate_number'));
+
+        if ($chosen === null || PlateNumber::normalise($chosen) === PlateNumber::normalise($plate)) {
             return null;
         }
 
-        return (int) $matched->first()->exit_event_id;
+        return $visits->first(
+            fn (Visit $visit): bool => PlateNumber::normalise($visit->plate_number) === $chosen,
+        );
     }
 
     protected function markSuperseded(PlateEvent $event, ?int $keptEventId): void

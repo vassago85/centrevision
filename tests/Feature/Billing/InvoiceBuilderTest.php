@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\BaseTier;
 use App\Enums\InvoiceLineKind;
 use App\Enums\InvoiceStatus;
 use App\Jobs\GenerateMonthlyInvoices;
@@ -28,14 +29,25 @@ beforeEach(function () {
     Camera::factory()->count(3)->for($this->siteA)->create();
     Camera::factory()->count(6)->for($this->siteB)->create();
 
+    // Pricing is bespoke per site, so individual tests attach their own
+    // handshakes inline when they need a positive invoice total. We can't do
+    // it in beforeEach because site_subscriptions.site_id is unique and the
+    // partner-share test below attaches its own handshake to siteA.
+
     $this->period = Date::parse('2026-07-01');
     $this->builder = app(InvoiceBuilder::class);
 });
 
 it('issues one consolidated invoice with a line per site', function () {
+    SiteSubscription::factory()->for($this->siteA)->tier(BaseTier::Starter)->create();
+    SiteSubscription::factory()->for($this->siteB)->tier(BaseTier::Standard)->create();
+
     $invoice = $this->builder->forOwner($this->owner, $this->period);
 
-    expect((float) $invoice->amount)->toBe(5000.00)
+    // siteA: Starter handshake R1,800, 3 cameras (below handshake ceiling of 4) → R1,800 flat.
+    // siteB: Standard handshake R3,200, 6 cameras (two over the handshake ceiling) → R3,200 base + 2 × R300 surcharge = R3,800.
+    // Owner invoice total: R5,600.
+    expect((float) $invoice->amount)->toBe(5600.00)
         ->and($invoice->status)->toBe(InvoiceStatus::Pending)
         ->and($invoice->period_start->toDateString())->toBe('2026-07-01')
         ->and($invoice->period_end->toDateString())->toBe('2026-07-31');
@@ -79,7 +91,12 @@ it('snapshots a site-agreement partner onto the base-fee line', function () {
         ->and((float) $line->meta['partner_amount'])->toBe(500.00);
 });
 
-it('adds a camera surcharge line only when the site is over the ceiling', function () {
+it('adds a camera surcharge line only when a handshake site is over the ceiling', function () {
+    // Camera surcharge only applies to handshake sites — a handshake is
+    // priced for Starter capacity (four cameras), so a fifth camera and up
+    // scales automatically on top of the agreed base. Metered sites (no
+    // handshake) have R0 base and no surcharge under bespoke pricing.
+    SiteSubscription::factory()->for($this->siteB)->tier(BaseTier::Standard)->create();
     Camera::factory()->count(12)->for($this->siteB)->create();
 
     $lines = $this->builder->forOwner($this->owner, $this->period)->lines;
@@ -154,6 +171,8 @@ it('is safe to run the monthly job twice', function () {
 it('appends a security operator seats line and adds it to the invoice total', function () {
     // Two operators × the configured seat rate is a flat added charge that
     // does not multiply with cameras or shops.
+    SiteSubscription::factory()->for($this->siteA)->tier(BaseTier::Starter)->create();
+    SiteSubscription::factory()->for($this->siteB)->tier(BaseTier::Standard)->create();
     User::factory()->securityOperator($this->owner)->count(2)->create();
 
     $rate = (float) config('trafficflow.security_operator_monthly_amount');
@@ -168,7 +187,7 @@ it('appends a security operator seats line and adds it to the invoice total', fu
         ->and($line->site_id)->toBeNull()
         ->and($line->meta['seats'])->toBe(2)
         // The total picks up the seat line on top of the two sites.
-        ->and((float) $invoice->amount)->toBe(round(5000.00 + 2 * $rate, 2));
+        ->and((float) $invoice->amount)->toBe(round(5600.00 + 2 * $rate, 2));
 });
 
 it('omits the security operator seats line when there are no operators', function () {

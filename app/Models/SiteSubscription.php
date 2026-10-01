@@ -72,8 +72,9 @@ class SiteSubscription extends Model implements SiteScoped
     }
 
     /**
-     * A stored positive base_fee is a handshake for this site, not the
-     * published tier price. Empty / zero means "meter this site as usual".
+     * A stored positive base_fee is a handshake for this site. Empty / zero
+     * means "no handshake" — under bespoke pricing the site then falls back
+     * to the owner's base-fee override, or to R0 if that is also unset.
      */
     public function hasAgreement(): bool
     {

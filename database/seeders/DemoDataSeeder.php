@@ -22,6 +22,7 @@ use App\Models\SiteSubscription;
 use App\Models\User;
 use App\Models\WatchlistPlate;
 use App\Support\Billing\InvoiceBuilder;
+use Database\Factories\SiteSubscriptionFactory;
 use Database\Seeders\Support\PlateFaker;
 use Database\Seeders\Support\TrafficGenerator;
 use Illuminate\Database\Seeder;
@@ -178,11 +179,14 @@ class DemoDataSeeder extends Seeder
 
     protected function createSubscriptions(Site $junction, Site $corner): void
     {
-        // Six cameras puts Garsfontein Junction on the Standard tier.
+        // Production pricing is bespoke per site; these demo handshakes are
+        // only here so the demo tenant's billing screen renders realistic
+        // Rand figures. SiteSubscriptionFactory::fixtureFeeFor() is the
+        // single source of truth for these representative amounts.
         SiteSubscription::create([
             'site_id' => $junction->id,
             'base_tier' => BaseTier::Standard,
-            'base_fee' => BaseTier::Standard->baseFee(),
+            'base_fee' => SiteSubscriptionFactory::fixtureFeeFor(BaseTier::Standard),
             'variable_rate_per_camera_per_subuser' => config('trafficflow.variable_rate_per_camera_per_subuser'),
             'variable_fee_cap' => 1500.00,
             'status' => SubscriptionStatus::Active,
@@ -192,7 +196,7 @@ class DemoDataSeeder extends Seeder
         SiteSubscription::create([
             'site_id' => $corner->id,
             'base_tier' => BaseTier::Starter,
-            'base_fee' => BaseTier::Starter->baseFee(),
+            'base_fee' => SiteSubscriptionFactory::fixtureFeeFor(BaseTier::Starter),
             'variable_rate_per_camera_per_subuser' => config('trafficflow.variable_rate_per_camera_per_subuser'),
             'variable_fee_cap' => null,
             'status' => SubscriptionStatus::Active,

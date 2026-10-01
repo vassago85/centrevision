@@ -50,10 +50,12 @@ class Organization extends Model
         // Per-owner billing overrides applied by BillingCalculator. `free`
         // short-circuits every fee (base, camera surcharge, variable, seat)
         // to zero. The three `*_override` values, when set to a positive
-        // number, replace the published tier on sites that have no handshake.
-        // A positive SiteSubscription.base_fee is a per-site agreement and
-        // beats these owner-wide numbers. `notes` is a free-text reminder
-        // shown to platform admins ("6-month pilot for X.").
+        // number, apply to every site this owner runs that has no per-site
+        // handshake. A positive SiteSubscription.base_fee is a per-site
+        // agreement and beats these owner-wide numbers. All pricing is
+        // bespoke — a site with neither a handshake nor an override is
+        // billed R0 for its base. `notes` is a free-text reminder shown to
+        // platform admins ("6-month pilot for X.").
         'billing' => [
             'free' => false,
             'base_fee_override' => null,

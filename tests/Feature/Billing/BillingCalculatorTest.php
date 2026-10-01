@@ -37,34 +37,33 @@ function payingShops(Site $site, int $count): void
     }
 }
 
-it('picks the tier from the camera count', function (int $cameras, BaseTier $tier, float $baseFee) {
+it('derives the tier bracket from the live camera count', function (int $cameras, BaseTier $tier) {
     Camera::factory()->count($cameras)->for($this->site)->create();
 
     $charge = $this->calculator->chargeForSite($this->site);
 
+    // The tier label is a size bracket shown on invoices and the sites grid;
+    // pricing is bespoke, so no Rand amount is implied by the tier itself.
     expect($charge->tier)->toBe($tier)
-        ->and($charge->baseFee)->toBe($baseFee);
+        ->and($charge->baseFee)->toBe(0.0);
 })->with([
-    [3, BaseTier::Starter, 1800.00],
-    [4, BaseTier::Starter, 1800.00],
-    [6, BaseTier::Standard, 3200.00],
-    [12, BaseTier::Large, 5500.00],
-    [18, BaseTier::Enterprise, 5500.00],
+    [3, BaseTier::Starter],
+    [4, BaseTier::Starter],
+    [6, BaseTier::Standard],
+    [12, BaseTier::Large],
+    [18, BaseTier::Enterprise],
 ]);
 
-it('charges per camera above the Large ceiling', function () {
+it('does not surcharge metered sites for cameras', function () {
+    // No handshake and no owner override — the base is R0 and so is any
+    // per-camera surcharge. The scaling surcharge is reserved for handshake
+    // sites, where it extends the four-camera Starter capacity.
     Camera::factory()->count(19)->for($this->site)->create();
 
     $charge = $this->calculator->chargeForSite($this->site);
 
-    // Three cameras past sixteen, at R300 each.
-    expect($charge->cameraSurcharge)->toBe(900.00);
-});
-
-it('does not charge a camera surcharge below Enterprise', function () {
-    Camera::factory()->count(16)->for($this->site)->create();
-
-    expect($this->calculator->chargeForSite($this->site)->cameraSurcharge)->toBe(0.0);
+    expect($charge->cameraSurcharge)->toBe(0.0)
+        ->and($charge->baseFee)->toBe(0.0);
 });
 
 it('multiplies cameras by paying shops for the variable fee', function () {
@@ -131,7 +130,7 @@ it('does not bill deactivated cameras', function () {
     expect($this->calculator->chargeForSite($this->site)->cameraCount)->toBe(4);
 });
 
-it('prefers a negotiated base fee over the published tier price', function () {
+it('uses the handshake base fee when a site agreement is set', function () {
     Camera::factory()->count(20)->for($this->site)->create();
 
     SiteSubscription::factory()
@@ -147,6 +146,11 @@ it('totals every site the owner runs', function () {
 
     Camera::factory()->count(3)->for($this->site)->create();
     Camera::factory()->count(6)->for($second)->create();
+
+    // Pricing is bespoke, so an owner total only has something to add up
+    // once per-site handshakes have been attached.
+    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 1800.00]);
+    SiteSubscription::factory()->for($second)->create(['base_fee' => 3200.00]);
 
     expect($this->calculator->chargesForOwner($this->owner))->toHaveCount(2)
         ->and($this->calculator->ownerTotal($this->owner))->toBe(5000.00);
@@ -186,8 +190,9 @@ it('costs zero for a site with no active cameras', function () {
 it('re-derives the tier from the live camera count regardless of stored tier', function () {
     // Store an Enterprise tier on the subscription but only run three cameras
     // and leave base_fee at zero so the metered path (not the negotiated
-    // override) is exercised. Metered billing should ignore the stored tier
-    // and settle on Starter.
+    // override) is exercised. Live camera count is the source of truth for
+    // the tier bracket, and bespoke pricing means the base fee is R0 until
+    // an admin sets a handshake.
     SiteSubscription::factory()
         ->for($this->site)
         ->create([
@@ -200,7 +205,7 @@ it('re-derives the tier from the live camera count regardless of stored tier', f
     $charge = $this->calculator->chargeForSite($this->site);
 
     expect($charge->tier)->toBe(BaseTier::Starter)
-        ->and($charge->baseFee)->toBe(1800.00);
+        ->and($charge->baseFee)->toBe(0.0);
 });
 
 it('prorates a site added mid-month by the days it was actually live', function () {
@@ -208,9 +213,11 @@ it('prorates a site added mid-month by the days it was actually live', function 
     // roughly half the base fee, not the full amount. created_at is not in
     // Site's Fillable list, and Eloquent's timestamp handling wants to
     // override it on save, so we stamp the row directly through the query
-    // builder to bypass both.
+    // builder to bypass both. Attach a handshake so there is a non-zero
+    // base to prorate — bespoke pricing means a bare site defaults to R0.
     $latecomer = Site::factory()->for_($this->owner)->create();
     Camera::factory()->count(3)->for($latecomer)->create();
+    SiteSubscription::factory()->for($latecomer)->create(['base_fee' => 1800.00]);
 
     DB::table('sites')
         ->where('id', $latecomer->id)
@@ -223,7 +230,7 @@ it('prorates a site added mid-month by the days it was actually live', function 
         Date::parse('2026-06-01'),
     );
 
-    // 30-day month, site created on the 16th, ~half the base fee.
+    // 30-day month, site created on the 16th, ~half the handshake base fee.
     expect($charge->prorationFactor)->toBeGreaterThan(0.4)
         ->and($charge->prorationFactor)->toBeLessThan(0.6)
         ->and($charge->baseFee)->toBeLessThan(1000.00)
@@ -310,7 +317,8 @@ it('honours a per-owner base fee override across every site', function () {
     $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 2500.00]]]);
 
     // Both the 3-camera Starter site and the 6-camera Standard site should
-    // pay the negotiated R2,500 instead of their tier defaults.
+    // pay the negotiated R2,500 instead of each falling through to the
+    // bespoke-pricing default of R0.
     expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(2500.00)
         ->and($this->calculator->chargeForSite($second->fresh())->baseFee)->toBe(2500.00);
 });
@@ -391,12 +399,14 @@ it('snapshots the site partner cut from their standing split', function () {
         ->and($charge->meta()['partner_amount'])->toBe(500.00);
 });
 
-it('treats a zero override as no override', function () {
+it('treats a zero override as no override and falls through to the handshake', function () {
     Camera::factory()->count(3)->for($this->site)->create();
 
-    // A zero override in the DB (e.g. an accidental save) must not wipe out
-    // the tier price — free accounts are expressed via the `free` flag.
+    // A zero override in the DB (e.g. an accidental save) must not shadow a
+    // legitimate per-site handshake. Free accounts are expressed via the
+    // separate `free` flag, not via a zero override.
+    SiteSubscription::factory()->for($this->site)->create(['base_fee' => 1500.00]);
     $this->owner->update(['settings' => ['billing' => ['base_fee_override' => 0]]]);
 
-    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(1800.00);
+    expect($this->calculator->chargeForSite($this->site->fresh())->baseFee)->toBe(1500.00);
 });

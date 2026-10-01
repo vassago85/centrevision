@@ -1,12 +1,12 @@
 @php
-    use App\Enums\BaseTier;
-
-    // Ordered by tier ceiling, with the middle option flagged as recommended.
-    $tiers = [
-        [BaseTier::Starter,    '1 – 4 cameras',  'One entrance. First-visit dashboard, live security alerts, unlimited history.', false],
-        [BaseTier::Standard,   '5 – 8 cameras',  'Multi-entrance sites and mid-size centres.',                                     true],
-        [BaseTier::Large,      '9 – 16 cameras', 'Corridor-scale centres and mixed-use campuses.',                                 false],
-        [BaseTier::Enterprise, '17+ cameras',    'Custom base plus per-camera pricing above 16.',                                  false],
+    // Pricing is bespoke per site. We keep the camera-count brackets below as
+    // sizing guidance only — no Rand amounts are published here or anywhere
+    // else in the app. See BillingCalculator / BaseTier for the rationale.
+    $sizingBrackets = [
+        ['Starter',    '1 – 4 cameras',  'One entrance. First-visit dashboard, live security alerts, unlimited history.'],
+        ['Standard',   '5 – 8 cameras',  'Multi-entrance sites and mid-size centres.'],
+        ['Large',      '9 – 16 cameras', 'Corridor-scale centres and mixed-use campuses.'],
+        ['Enterprise', '17+ cameras',    'Larger campuses with mixed use and multiple entrances.'],
     ];
 @endphp
 
@@ -208,8 +208,8 @@
                             Month-to-month. Cancel any month.
                         </h2>
                         <p class="mt-3 text-white/80">
-                            One tier fee based on how many cameras you connect. A small variable fee if you're reselling
-                            sub-account access to tenants. That's the whole invoice.
+                            Pricing is agreed with us per site, based on the cameras you connect and the shape of your
+                            centre. A small variable fee applies if you're reselling sub-account access to tenants.
                         </p>
                     </div>
 
@@ -230,53 +230,44 @@
 
                 <div class="mb-10 max-w-2xl">
                     <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">Pricing</p>
-                    <h2 class="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">One plan per size of centre.</h2>
+                    <h2 class="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Shaped around your centre.</h2>
+                    <p class="mt-3 text-[15px] leading-relaxed text-ink-2">
+                        Every centre we work with gets a bespoke quote. The brackets below are only a sizing guide so
+                        you know roughly where you'll land before we talk — the final number depends on your camera
+                        plan, how many tenant sub-accounts you'll be reselling, and what reporting you need.
+                    </p>
                 </div>
 
                 <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-                    @foreach ($tiers as [$tier, $range, $body, $recommended])
-                        <article @class([
-                            'relative flex flex-col gap-5 rounded-2xl border p-7 shadow-tf-sm transition-shadow hover:shadow-tf-md',
-                            'border-accent bg-surface shadow-tf-md ring-1 ring-accent' => $recommended,
-                            'border-line bg-surface' => ! $recommended,
-                        ])>
-                            @if ($recommended)
-                                <span class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent dark:bg-accent-2 px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-white shadow-tf-sm">
-                                    Recommended
-                                </span>
-                            @endif
-
+                    @foreach ($sizingBrackets as [$label, $range, $body])
+                        <article class="flex flex-col gap-5 rounded-2xl border border-line bg-surface p-7 shadow-tf-sm transition-shadow hover:shadow-tf-md">
                             <div>
-                                <h3 class="text-lg font-semibold text-ink">{{ $tier->label() }}</h3>
+                                <h3 class="text-lg font-semibold text-ink">{{ $label }}</h3>
                                 <p class="mt-1 text-[12px] uppercase tracking-[0.14em] text-ink-muted">{{ $range }}</p>
-                            </div>
-
-                            <div>
-                                @if ($tier === BaseTier::Enterprise)
-                                    <p class="text-4xl font-bold text-ink">Custom</p>
-                                    <p class="mt-1 text-sm text-ink-muted">Per camera above 16</p>
-                                @else
-                                    <p class="flex items-baseline gap-1 text-ink">
-                                        <span class="text-4xl font-bold">R{{ number_format($tier->baseFee(), 0) }}</span>
-                                        <span class="text-sm font-medium text-ink-muted">/ month</span>
-                                    </p>
-                                    <p class="mt-1 text-sm text-ink-muted">Excludes shop variable fee</p>
-                                @endif
                             </div>
 
                             <p class="text-[13.5px] leading-relaxed text-ink-2">{{ $body }}</p>
 
-                            <flux:button
-                                :href="route('register')"
-                                :variant="$recommended ? 'primary' : 'ghost'"
-                                size="sm"
-                                class="mt-auto w-full justify-center"
-                                icon-trailing="arrow-right"
-                            >
-                                {{ $tier === BaseTier::Enterprise ? 'Contact sales' : 'Start trial' }}
-                            </flux:button>
+                            <p class="mt-auto text-[12.5px] font-medium text-ink-muted">Quoted per site</p>
                         </article>
                     @endforeach
+                </div>
+
+                {{-- Single CTA so the sizing cards don't feel like a price list. --}}
+                <div class="mt-10 flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface p-8 text-center shadow-tf-sm">
+                    <h3 class="text-xl font-semibold text-ink">Ready for a quote?</h3>
+                    <p class="max-w-xl text-[13.5px] text-ink-2">
+                        Send us a note with how many entrances and cameras you have and we'll come back with a number
+                        and a free two-week trial. No contract, no obligation.
+                    </p>
+                    <div class="mt-2 flex flex-wrap items-center justify-center gap-3">
+                        <flux:button :href="'mailto:'.config('trafficflow.billing_email')" variant="primary" size="base" icon="envelope" icon-trailing="arrow-right">
+                            Request a quote
+                        </flux:button>
+                        <flux:button :href="route('register')" variant="ghost" size="base">
+                            Start a free trial
+                        </flux:button>
+                    </div>
                 </div>
             </div>
         </section>

@@ -303,8 +303,10 @@ new #[Title('Sites')] class extends Component
                 'occupancy_percent' => ($hasExit && $capacity !== null && $capacity > 0)
                     ? round($onSiteCount / $capacity * 100, 1)
                     : null,
-                // Metered pricing: the tier reflects the site's live camera
-                // count, and moves as cameras are added or retired.
+                // Tier bracket (Starter / Standard / Large / Enterprise)
+                // is derived from the live camera count and shown as a size
+                // badge on the card. Pricing is bespoke per site, so no
+                // Rand amount is implied by the tier itself.
                 'tier' => BaseTier::forCameraCount($activeCameras),
                 'last_event_at' => $last?->last_event_at ? Date::parse($last->last_event_at) : null,
             ];
@@ -321,7 +323,7 @@ new #[Title('Sites')] class extends Component
 <div>
     <x-page-header
         title="Sites"
-        subtitle="Every property this account owns. Add a site, plug in cameras, and pricing meters itself against how many cameras that site actually runs."
+        subtitle="Every property this account owns. Add a site, plug in cameras, and your account manager will attach a bespoke base fee once the camera plan is confirmed."
     >
         <x-slot name="actions">
             @unless ($this->sites->isEmpty())
@@ -331,19 +333,16 @@ new #[Title('Sites')] class extends Component
         </x-slot>
     </x-page-header>
 
-    {{-- Metering explainer — kept low-key so it doesn't shout, but visible
-         enough that a new owner understands "cameras → tier → bill" before
-         they add their first site. --}}
+    {{-- Pricing explainer — reflects that every site is quoted bespoke by
+         the Platform team. The tier label on each site card below is kept
+         as a size bracket (how many cameras it carries), not a published
+         price. --}}
     <div class="mb-6 rounded-tf border border-line bg-surface-2 p-4 text-[13px] text-ink-2">
         <p>
-            <span class="font-semibold text-ink">Metered pricing.</span>
-            Each site's monthly base is set by its <em class="not-italic font-semibold text-ink">live camera count</em> at billing time —
-            Starter up to 4 cameras (R{{ number_format(BaseTier::Starter->baseFee(), 0) }}),
-            Standard to 8 (R{{ number_format(BaseTier::Standard->baseFee(), 0) }}),
-            Large to 16 (R{{ number_format(BaseTier::Large->baseFee(), 0) }}),
-            Enterprise beyond that (R{{ number_format(BaseTier::Large->baseFee(), 0) }} +
-            R{{ number_format(BaseTier::ENTERPRISE_PER_CAMERA_FEE, 0) }}/extra camera).
-            No caps on how many sites you can add. A site with zero cameras costs nothing.
+            <span class="font-semibold text-ink">Bespoke pricing.</span>
+            Each site is quoted individually based on its camera footprint and the shops you'll be reselling to.
+            A site with no agreed base fee yet costs nothing — your account manager will set the number for a site
+            once the camera plan is confirmed. No caps on how many sites you can add.
         </p>
     </div>
 
@@ -508,10 +507,9 @@ new #[Title('Sites')] class extends Component
 
             @if (! $editingId)
                 <div class="rounded-tf border border-line bg-surface-2 p-3 text-[12px] text-ink-2">
-                    A Starter subscription (R{{ number_format(BaseTier::Starter->baseFee(), 0) }}/month, up to 4 cameras)
-                    will attach automatically. You'll only be billed once you add a camera —
-                    a site with zero cameras costs nothing. As you add cameras the tier
-                    auto-adjusts on your next invoice.
+                    No fee is attached automatically. Your account manager will set the base price for this site
+                    once the camera plan is confirmed; until then it's billed at R0, and you can keep adding cameras
+                    in the meantime.
                 </div>
             @endif
 

@@ -21,15 +21,17 @@ use Illuminate\Support\Facades\Date;
 /**
  * Works out what an owner owes for a month.
  *
- * Pricing is fully metered: an owner may add sites and cameras freely and the
- * bill just tracks what they actually run. A site's tier is re-derived from
- * its live camera count on every billing pass — Starter up to 4 cameras,
- * Standard to 8, Large to 16, Enterprise beyond, with a per-camera surcharge
- * once the Large ceiling is passed. A positive SiteSubscription.base_fee is
- * a per-site handshake that beats the owner-wide override and the published
- * tier; cameras past the Starter ceiling then add the usual per-camera
- * surcharge. On top of that, each site pays a variable fee tied to how many
- * paying shops the owner has resold access to.
+ * Pricing is bespoke per site: there are no published tier prices. A site is
+ * billed R0 for its base unless a Platform admin has set either a per-site
+ * SiteSubscription handshake or a per-owner `billing.base_fee_override`.
+ * The tier (Starter / Standard / Large / Enterprise) is still derived from
+ * the live camera count and shown as a size bracket on invoices and the
+ * sites grid, but it carries no Rand amount of its own. Cameras past the
+ * Starter ceiling on a handshake site add the usual per-camera surcharge
+ * so a four-camera deal auto-scales when the fifth camera is plugged in;
+ * metered (handshake-less) sites get no surcharge either. On top of that,
+ * each site pays a variable fee tied to how many paying shops the owner
+ * has resold access to.
  *
  * Sites created part-way through a month are prorated by day count so an owner
  * who onboards a mall on the 20th is not billed as if it ran the whole month.
@@ -53,9 +55,10 @@ class BillingCalculator
         $subscription = $this->subscriptionFor($site);
         $owner = $site->organization;
 
-        // Metered: always derive the tier from the live camera count. A stored
+        // Always derive the tier from the live camera count. A stored
         // base_tier is left on the row as a display hint but is not the source
-        // of truth for what the owner pays — the number of cameras is.
+        // of truth for what the owner pays — the number of cameras is, and
+        // (under bespoke pricing) the handshake fee that was agreed for it.
         $tier = BaseTier::forCameraCount($cameras);
 
         // A platform admin can flag an owner as "free" from the Owners page —
@@ -83,16 +86,17 @@ class BillingCalculator
         //      an owner-wide override — the next site they add may be priced
         //      completely differently.
         //   2. Per-owner override (fallback for sites that have no handshake).
-        //   3. Published tier price derived from the camera count.
+        //   3. R0. All pricing is bespoke; a site with neither a handshake
+        //      nor an owner override is not billed for its base until a
+        //      Platform admin sets one.
         $ownerBaseOverride = $this->positiveOverride($owner, 'billing.base_fee_override');
         $negotiatedBase = $subscription !== null ? (float) $subscription->base_fee : 0.0;
         $hasAgreement = $negotiatedBase > 0.0;
-        $publishedBase = $tier->baseFee();
 
         $baseFee = match (true) {
             $hasAgreement => $negotiatedBase,
             $ownerBaseOverride !== null => $ownerBaseOverride,
-            default => $publishedBase,
+            default => 0.0,
         };
 
         // Same precedence for the variable rate.
@@ -250,10 +254,13 @@ class BillingCalculator
     }
 
     /**
-     * Extra cameras beyond the included ceiling. Metered sites only surcharge
-     * once they are Enterprise (above the Large ceiling of 16). A handshake
-     * is priced for Starter capacity — four cameras — so the fifth and up
-     * use the same per-camera fee on top of the agreed base.
+     * Extra cameras beyond the included ceiling. Only handshake sites
+     * surcharge: a handshake is priced for Starter capacity (four cameras)
+     * and the fifth and up add the per-camera fee on top of the agreed
+     * base, so a four-camera deal auto-scales when the fifth camera is
+     * plugged in without renegotiating the handshake. Metered sites (no
+     * handshake, no owner override) carry no surcharge — their whole base
+     * is bespoke and set in Platform admin.
      */
     protected function cameraSurcharge(BaseTier $tier, int $cameras, bool $hasAgreement = false): float
     {

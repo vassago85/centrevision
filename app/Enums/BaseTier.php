@@ -32,22 +32,27 @@ enum BaseTier: string
         };
     }
 
+    /**
+     * All pricing is bespoke — a site is billed R0 for its base unless
+     * either a per-site SiteSubscription handshake or a per-owner
+     * `billing.base_fee_override` has been set in Platform admin. The tier
+     * itself is kept purely as a size bracket shown on the sites grid and
+     * invoice lines; it no longer carries a Rand amount.
+     */
     public function baseFee(): float
     {
-        return match ($this) {
-            self::Starter => 1800.00,
-            self::Standard => 3200.00,
-            self::Large => 5500.00,
-            self::Enterprise => 5500.00,
-        };
+        return 0.00;
     }
 
     /**
-     * Enterprise sites pay a per-camera surcharge above the Large ceiling.
+     * No automatic per-camera surcharge on metered sites — bespoke pricing
+     * means the per-site handshake carries any extra-camera arithmetic.
+     * Handshake sites still get the per-camera scaling above the Starter
+     * ceiling, handled inside BillingCalculator::cameraSurcharge().
      */
     public function perCameraSurchargeAbove(): ?int
     {
-        return $this === self::Enterprise ? 16 : null;
+        return null;
     }
 
     public const ENTERPRISE_PER_CAMERA_FEE = 300.00;

@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\BaseTier;
 use App\Enums\InvoiceStatus;
 use App\Enums\PayoutStatus;
 use App\Models\Camera;
@@ -17,14 +18,17 @@ use Livewire\Livewire;
 
 beforeEach(function () {
     // Pin the clock to the start of a month so factory-built sites are
-    // treated as full-period by the metered billing calculator.
+    // treated as full-period by the billing calculator.
     Date::setTestNow('2026-06-01 00:00:00');
 
     $this->partner = Partner::factory()->create(['name' => 'Northgate Installs', 'commission_rate' => 0.20]);
 
     $this->owner = Organization::factory()->owner()->referredBy($this->partner)->create(['name' => 'Owner A']);
     $this->site = Site::factory()->for_($this->owner)->create(['name' => 'Mall A']);
-    SiteSubscription::factory()->for($this->site)->create();
+    // Pricing is bespoke per site, so these tests attach representative
+    // tier handshakes (SiteSubscriptionFactory::fixtureFeeFor) to drive the
+    // overview totals rather than relying on any published tier price.
+    SiteSubscription::factory()->for($this->site)->tier(BaseTier::Starter)->create();
     Camera::factory()->count(3)->for($this->site)->create();
 
     ShopSubscription::factory()
@@ -34,16 +38,20 @@ beforeEach(function () {
     $this->other = Organization::factory()->owner()->create(['name' => 'Owner B']);
     $otherSite = Site::factory()->for_($this->other)->create();
     Camera::factory()->count(6)->for($otherSite)->create();
-    SiteSubscription::factory()->for($otherSite)->pastDue()->create();
+    SiteSubscription::factory()->for($otherSite)->tier(BaseTier::Standard)->pastDue()->create();
 
     $this->admin = actingAsTenant(User::factory()->platformAdmin()->create());
 });
 
 it('shows revenue across every tenant', function () {
     Livewire::test('pages::platform.overview')
-        // Owner A: R1,800 base + R54 variable + R120 platform shop share.
-        // Owner B: R3,200 base.
-        ->assertSee('R5,174.00');
+        // Owner A: R1,800 Starter handshake (3 cameras, below the 4-camera
+        //          handshake ceiling → no surcharge) + R54 variable (3 cameras
+        //          × 1 shop × R18) + R120 platform shop share (30% of R400).
+        // Owner B: R3,200 Standard handshake + R600 camera surcharge
+        //          ((6 - 4) × R300 scales a Starter-capacity handshake up to
+        //          the live camera count).
+        ->assertSee('R5,774.00');
 });
 
 it('shows how full the storage volume is', function () {

@@ -53,9 +53,9 @@ new #[Title('Owners')] class extends Component {
 
     /**
      * Per-owner overrides. Strings, not floats, so an empty input reads back
-     * as "" — that's what the save handler treats as "no override, use the
-     * tier default". Casting to nullable float on save keeps the settings
-     * JSON tidy.
+     * as "" — that's what the save handler treats as "no override, bill at
+     * R0 unless a per-site handshake is set". Casting to nullable float on
+     * save keeps the settings JSON tidy.
      */
     public string $billingBaseFeeOverride = '';
 
@@ -502,8 +502,8 @@ new #[Title('Owners')] class extends Component {
                         step="0.01"
                         min="0"
                         label="Base fee override (R / site / month)"
-                        placeholder="Tier default"
-                        description="Starter R{{ number_format(BaseTier::Starter->baseFee(), 0) }}, Standard R{{ number_format(BaseTier::Standard->baseFee(), 0) }}, Large R{{ number_format(BaseTier::Large->baseFee(), 0) }}."
+                        placeholder="R0 (no bespoke fee)"
+                        description="All pricing is bespoke — set a per-site fee below, or an owner-wide fallback here. Sites with neither are billed R0 for their base."
                     />
 
                     <flux:input

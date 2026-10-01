@@ -55,8 +55,9 @@ return [
     'webhook_max_attachment_bytes' => (int) env('TRAFFICFLOW_WEBHOOK_MAX_ATTACHMENT_BYTES', 1_500_000),
 
     // How long plate/vehicle JPEGs stay on disk. The database row is the
-    // durable record; snapshots are only kept for a day.
-    'webhook_capture_hours' => (int) env('TRAFFICFLOW_WEBHOOK_CAPTURE_HOURS', 24),
+    // durable record; snapshots are only kept for 5 days (120 hours) on the
+    // dedicated plate-captures volume.
+    'webhook_capture_hours' => (int) env('TRAFFICFLOW_WEBHOOK_CAPTURE_HOURS', 120),
 
     // Inbox files older than this mean the queue worker is stuck. Drop them
     // so a backlog cannot fill the volume. The camera already got a 200.

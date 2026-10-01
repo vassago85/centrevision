@@ -12,12 +12,13 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Drop stale webhook staging files and day-old camera JPEGs so a busy
- * site cannot fill the storage volume.
+ * Drop stale webhook staging files and camera JPEGs past their retention
+ * window so a busy site cannot fill the storage volume.
  *
  * Inbox files should vanish in seconds once the worker parses them.
- * Plate-capture JPEGs are kept for one day. Leftover quarantine from
- * earlier builds is wiped outright.
+ * Plate-capture JPEGs are kept for `trafficflow.webhook_capture_hours`
+ * (default 5 days). Leftover quarantine from earlier builds is wiped
+ * outright.
  */
 class PruneWebhookStaging implements ShouldBeUnique, ShouldQueue
 {

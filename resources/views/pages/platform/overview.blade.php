@@ -101,10 +101,16 @@ new #[Title('Platform')] class extends Component {
                 :value="$this->diskUsage->freeLabel()"
                 :variant="$this->diskUsage->variant() === 'danger' ? 'danger' : 'default'"
             />
+            @php
+                $captureHours = (int) config('trafficflow.webhook_capture_hours');
+                $captureDelta = $captureHours > 0 && $captureHours % 24 === 0
+                    ? 'Kept '.($captureHours / 24).' '.\Illuminate\Support\Str::plural('day', $captureHours / 24)
+                    : 'Kept '.$captureHours.' hours';
+            @endphp
             <x-metric
                 label="Plate photos"
                 :value="$this->diskUsage->captureLabel()"
-                :delta="'Kept '.(int) config('trafficflow.webhook_capture_hours').' hours'"
+                :delta="$captureDelta"
             />
         </div>
     </x-panel>

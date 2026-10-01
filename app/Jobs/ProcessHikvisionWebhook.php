@@ -24,7 +24,11 @@ class ProcessHikvisionWebhook implements ShouldQueue
 {
     use Queueable;
 
-    /** Plate/vehicle JPEGs. PruneWebhookStaging deletes them after a day. */
+    /**
+     * Plate/vehicle JPEGs. PruneWebhookStaging deletes them once they pass
+     * `trafficflow.webhook_capture_hours` (default 5 days). On the server
+     * this directory is a bind mount to the dedicated captures HDD.
+     */
     public const CAPTURES_DIR = 'plate-captures';
 
     /** Leftover unparseable bodies from when we used to quarantine them. */
@@ -119,8 +123,8 @@ class ProcessHikvisionWebhook implements ShouldQueue
 
     /**
      * Save the plate crop and vehicle snapshots next to the event. They
-     * live under {camera}/{year}/{month}/{day}/ so a one-day prune can
-     * drop a whole folder without walking every remaining event.
+     * live under {camera}/{year}/{month}/{day}/ so the retention prune can
+     * drop whole folders without walking every remaining event.
      *
      * @param  list<HikvisionAttachment>  $attachments
      */

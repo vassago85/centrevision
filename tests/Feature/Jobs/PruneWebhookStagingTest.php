@@ -19,19 +19,26 @@ it('wipes leftover quarantine files', function () {
     expect(Storage::disk('local')->exists($quarantine))->toBeFalse();
 });
 
-it('deletes plate-capture JPEGs older than a day and keeps newer ones', function () {
+it('deletes plate-capture JPEGs past the retention window and keeps newer ones', function () {
     Date::setTestNow('2026-09-11 10:00:00');
 
-    $stale = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/10/99-0.jpg';
-    $fresh = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/11/100-0.jpg';
+    $stale = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/05/99-0.jpg';
+    $recent = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/10/100-0.jpg';
+    $fresh = ProcessHikvisionWebhook::CAPTURES_DIR.'/12/2026/09/11/101-0.jpg';
 
     Storage::disk('local')->put($stale, 'old-jpeg');
+    Storage::disk('local')->put($recent, 'day-old-jpeg');
     Storage::disk('local')->put($fresh, 'new-jpeg');
-    touch(Storage::disk('local')->path($stale), now()->subHours(25)->timestamp);
+    // Default retention is 120 hours (5 days). A file aged just past that
+    // must be swept; a 25-hour-old file now stays, since the window is
+    // measured in days, not a single day.
+    touch(Storage::disk('local')->path($stale), now()->subHours(121)->timestamp);
+    touch(Storage::disk('local')->path($recent), now()->subHours(25)->timestamp);
 
     PruneWebhookStaging::dispatchSync();
 
     expect(Storage::disk('local')->exists($stale))->toBeFalse()
+        ->and(Storage::disk('local')->exists($recent))->toBeTrue()
         ->and(Storage::disk('local')->exists($fresh))->toBeTrue();
 });
 

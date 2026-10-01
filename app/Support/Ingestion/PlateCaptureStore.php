@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 /**
- * Locate the day-old plate/vehicle JPEGs stored next to a plate event.
+ * Locate the short-lived plate/vehicle JPEGs stored next to a plate event
+ * (kept for `trafficflow.webhook_capture_hours`, default 5 days).
  *
  * Files live at plate-captures/{camera}/{Y}/{m}/{d}/{eventId}-{index}.{ext}.
  * The folder date is the process day, which is captured_at in almost every

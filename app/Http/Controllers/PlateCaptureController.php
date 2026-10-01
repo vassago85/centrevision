@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Stream a plate/vehicle JPEG that is still on disk (kept for one day).
+ * Stream a plate/vehicle JPEG that is still on disk (kept for
+ * `trafficflow.webhook_capture_hours`, default 5 days).
  *
  * Auth + the plate-data policy apply: shops never see these, and an owner
  * can only fetch events from sites they can reach.

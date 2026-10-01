@@ -55,6 +55,11 @@ services:
       # to it directly (or you can point a separate FTP container at the same
       # volume). Same directory the Sweep job scans.
       - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+      # Plate/vehicle JPEGs live on the dedicated captures HDD, bind-mounted
+      # from the host so a busy site cannot fill the root volume. All three
+      # PHP containers must see the same path: queue writes, app serves,
+      # scheduler prunes. Override the host path with PLATE_CAPTURES_PATH.
+      - ${PLATE_CAPTURES_PATH:-/mnt/centrevision-captures}:/var/www/html/storage/app/private/plate-captures
     networks:
       - centrevision-network
     depends_on:
@@ -156,6 +161,10 @@ services:
       - app-storage:/var/www/html/storage/app
       - app-logs:/var/www/html/storage/logs
       - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+      # Share the plate-captures HDD bind mount with the app container so
+      # the scheduler's PruneWebhookStaging job and the queue worker's
+      # ProcessHikvisionWebhook writes land on the same filesystem.
+      - ${PLATE_CAPTURES_PATH:-/mnt/centrevision-captures}:/var/www/html/storage/app/private/plate-captures
     networks:
       - centrevision-network
     depends_on:
@@ -214,6 +223,10 @@ services:
       - app-storage:/var/www/html/storage/app
       - app-logs:/var/www/html/storage/logs
       - hik-drop:/var/www/html/storage/app/private/hikvision-drop
+      # Share the plate-captures HDD bind mount with the app container so
+      # the scheduler's PruneWebhookStaging job and the queue worker's
+      # ProcessHikvisionWebhook writes land on the same filesystem.
+      - ${PLATE_CAPTURES_PATH:-/mnt/centrevision-captures}:/var/www/html/storage/app/private/plate-captures
     networks:
       - centrevision-network
     depends_on:

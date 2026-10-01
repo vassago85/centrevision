@@ -17,6 +17,10 @@ mkdir -p /var/www/html/bootstrap/cache
 # Camera-drop targets referenced by SweepFtpDropFolder.
 mkdir -p /var/www/html/storage/app/private/hikvision-drop
 mkdir -p /var/www/html/storage/app/private/hikvision-drop/failed
+# Plate-captures directory. On production this path is a bind mount to the
+# dedicated captures HDD; mkdir is a no-op there but keeps dev + first-boot
+# working before the mount exists.
+mkdir -p /var/www/html/storage/app/private/plate-captures
 
 echo "🔧 Setting permissions..."
 chown -R www-data:www-data /var/www/html/storage

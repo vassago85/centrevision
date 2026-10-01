@@ -10,9 +10,14 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
 /**
- * How full the volume behind storage/app is, plus how much of it is
- * day-old plate JPEGs. Cheap enough for a dashboard poll: volume stats
- * are two syscalls, and the capture-folder walk is cached for a minute.
+ * How full the volume behind the plate-captures directory is, plus how
+ * much of it is plate JPEGs. On production the captures live on a
+ * dedicated HDD bind-mounted into the container, so the stats intentionally
+ * follow that mount rather than the shared storage volume. If the captures
+ * directory does not exist yet, we fall back to the storage root so a fresh
+ * install still has sensible numbers. Cheap enough for a dashboard poll:
+ * volume stats are two syscalls, and the capture-folder walk is cached for
+ * a minute.
  */
 class DiskUsage
 {
@@ -26,11 +31,7 @@ class DiskUsage
 
     public static function snapshot(): self
     {
-        $path = Storage::disk('local')->path('');
-
-        if (! is_dir($path)) {
-            $path = storage_path();
-        }
+        $path = self::statPath();
 
         $total = disk_total_space($path);
         $free = disk_free_space($path);
@@ -105,6 +106,30 @@ class DiskUsage
         $formatted = number_format($value, $decimals, '.', '');
 
         return rtrim(rtrim($formatted, '0'), '.').' '.$units[$unit];
+    }
+
+    /**
+     * Pick the filesystem whose free/used space we report. Prefer the
+     * plate-captures directory because production bind-mounts it to the
+     * dedicated HDD; disk_*_space on a child path reports the mount that
+     * owns it. Fall back to the storage root (and then storage_path()) if
+     * the folder has not been created yet.
+     */
+    protected static function statPath(): string
+    {
+        $captures = Storage::disk('local')->path(ProcessHikvisionWebhook::CAPTURES_DIR);
+
+        if (is_dir($captures)) {
+            return $captures;
+        }
+
+        $root = Storage::disk('local')->path('');
+
+        if (is_dir($root)) {
+            return $root;
+        }
+
+        return storage_path();
     }
 
     protected static function directoryBytes(string $directory): int

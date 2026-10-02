@@ -117,7 +117,51 @@ it('lists the organization team', function () {
     $colleague = User::factory()->ownerAdmin($this->owner)->create(['name' => 'Sipho Ndlovu']);
     $outsider = User::factory()->create(['name' => 'Someone Else']);
 
-    Livewire::test('pages::settings')
+    Livewire::withQueryParams(['tab' => 'team'])
+        ->test('pages::settings')
         ->assertSee($colleague->name)
         ->assertDontSee($outsider->name);
+});
+
+it('takes the platform share as a percentage but stores a fraction', function () {
+    Livewire::withQueryParams(['tab' => 'commercial'])
+        ->test('pages::settings')
+        ->assertSee('Platform share (%)')
+        ->set('platformSharePercent', 25)
+        ->call('saveRevenueShare')
+        ->assertHasNoErrors()
+        ->assertSet('platformSharePercent', 25.0);
+
+    expect((float) $this->owner->fresh()->setting('platform_shop_revenue_share'))->toBe(0.25);
+});
+
+it('rejects a platform share above 90 percent', function () {
+    Livewire::test('pages::settings')
+        ->set('platformSharePercent', 95)
+        ->call('saveRevenueShare')
+        ->assertHasErrors('platformSharePercent');
+});
+
+it('shows unsaved and saved status per section', function () {
+    Livewire::test('pages::settings')
+        ->set('dwellAlertHours', 6)
+        ->assertSet('dirty', ['site' => true])
+        ->assertSee('Unsaved changes')
+        ->set('tab', 'alerts')
+        ->assertSee('Unsaved changes in Site & parking')
+        ->set('tab', 'site')
+        ->call('save')
+        ->assertSet('dirty', [])
+        ->assertSee('Saved at');
+});
+
+it('opens the section named in the url and falls back for unknown ones', function () {
+    Livewire::withQueryParams(['tab' => 'reports'])
+        ->test('pages::settings')
+        ->assertSee('Scheduled reports')
+        ->assertSee('vehicle registration');
+
+    Livewire::withQueryParams(['tab' => 'nonsense'])
+        ->test('pages::settings')
+        ->assertSet('tab', 'site');
 });

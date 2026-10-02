@@ -11,8 +11,8 @@
              whichever tab was current at initial page load. --}}
         <x-sidebar />
 
-        <main class="lg:pl-[264px]">
-            <div class="mx-auto max-w-[1200px] px-5 pt-6 pb-16 sm:px-8">
+        <main class="lg:pl-[220px]">
+            <div class="mx-auto max-w-[1700px] px-4 pt-4 pb-16 sm:px-6 sm:pt-6">
                 <x-impersonation-banner />
                 <x-subscription-banner />
 

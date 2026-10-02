@@ -323,7 +323,7 @@ new #[Title('Sites')] class extends Component
 <div>
     <x-page-header
         title="Sites"
-        subtitle="Every property this account owns. Add a site, plug in cameras, and your account manager will attach a bespoke base fee once the camera plan is confirmed."
+        subtitle="Every property this account owns."
     >
         <x-slot name="actions">
             @unless ($this->sites->isEmpty())
@@ -333,125 +333,110 @@ new #[Title('Sites')] class extends Component
         </x-slot>
     </x-page-header>
 
-    {{-- Pricing explainer — reflects that every site is quoted bespoke by
-         the Platform team. The tier label on each site card below is kept
-         as a size bracket (how many cameras it carries), not a published
-         price. --}}
-    <div class="mb-6 rounded-tf border border-line bg-surface-2 p-4 text-[13px] text-ink-2">
-        <p>
-            <span class="font-semibold text-ink">Bespoke pricing.</span>
-            Each site is quoted individually based on its camera footprint and the shops you'll be reselling to.
-            A site with no agreed base fee yet costs nothing — your account manager will set the number for a site
-            once the camera plan is confirmed. No caps on how many sites you can add.
-        </p>
-    </div>
+    {{-- Every site is quoted individually by the Platform team; the help
+         stays one click away instead of taking a paragraph of the page. --}}
+    <details class="tf-disclosure mb-4 rounded-tf border border-line bg-surface px-4 text-[13px] text-ink-2">
+        <summary class="font-medium text-ink">How site pricing works</summary>
+        <div class="space-y-2 pb-4">
+            <p>
+                Each site is quoted individually based on its camera footprint and the shops you'll be reselling to.
+                A site with no agreed base fee yet costs nothing — your account manager sets the number once the camera plan is confirmed.
+            </p>
+            <p>There is no cap on how many sites you can add.</p>
+        </div>
+    </details>
 
     @if ($this->sites->isEmpty())
-        <div class="rounded-tf border border-dashed border-line bg-surface p-10 text-center">
-            <div class="mx-auto flex size-12 items-center justify-center rounded-full bg-accent-soft text-accent">
-                <flux:icon icon="building-office-2" class="size-6" />
-            </div>
-            <h2 class="mt-4 text-[15px] font-semibold text-ink">Add your first site</h2>
-            <p class="mx-auto mt-1 max-w-md text-[13px] text-ink-2">
-                A site is one property — a mall, a park, a business complex. You can add as many as you need;
-                billing only charges for the ones with cameras plugged in.
-            </p>
-            <flux:button class="mt-5" variant="primary" icon="plus" wire:click="add">New site</flux:button>
-        </div>
+        <x-panel-card>
+            <x-empty-state title="Add your first site" icon="building-office-2">
+                A site is one property — a mall, a park, a business complex. Add as many as you need; billing only charges for the ones with cameras plugged in.
+                <x-slot:action>
+                    <flux:button size="sm" variant="primary" icon="plus" wire:click="add">New site</flux:button>
+                </x-slot:action>
+            </x-empty-state>
+        </x-panel-card>
     @else
-        <div class="grid gap-3 md:grid-cols-2">
+        <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
             @foreach ($this->sites as $row)
                 @php
                     $isCurrent = $this->currentSiteId === $row->site->id;
+                    $statusDot = match (true) {
+                        $row->cameras_total === 0 => 'border border-line bg-surface-2',
+                        $row->cameras_offline === 0 && $row->cameras_online > 0 => 'bg-positive',
+                        $row->cameras_online > 0 => 'bg-warn',
+                        default => 'bg-danger',
+                    };
                 @endphp
 
-                <article @class([
-                    'flex flex-col gap-4 rounded-tf border bg-surface p-5',
-                    'border-accent shadow-[0_0_0_1px_var(--color-accent)]' => $isCurrent,
-                    'border-line' => ! $isCurrent,
-                ])>
+                <article
+                    wire:key="site-{{ $row->site->id }}"
+                    @class([
+                        'flex flex-col gap-3 rounded-tf border bg-surface p-4',
+                        'border-accent ring-1 ring-accent' => $isCurrent,
+                        'border-line' => ! $isCurrent,
+                    ])
+                >
                     <header class="flex items-start justify-between gap-3">
                         <div class="min-w-0">
-                            <h2 class="text-base font-semibold text-ink">{{ $row->site->name }}</h2>
+                            <h2 class="truncate text-[15px] font-semibold text-ink">{{ $row->site->name }}</h2>
                             @if ($row->site->address)
-                                <p class="text-[13px] text-ink-2">{{ $row->site->address }}</p>
+                                <p class="truncate text-[13px] text-ink-2">{{ $row->site->address }}</p>
                             @endif
                         </div>
 
-                        <div class="flex flex-col items-end gap-1.5">
-                            @if ($isCurrent)
-                                <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent">Current</span>
-                            @endif
-                            <span class="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
-                                {{ $row->tier->label() }} tier
-                            </span>
-                        </div>
+                        @if ($isCurrent)
+                            <span class="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[12px] font-semibold text-accent">Current</span>
+                        @endif
                     </header>
 
-                    {{-- Camera status strip — a compact business signal that
-                         echoes the top of the Cameras page. Green dot when
-                         everything is talking; red when a device is down. --}}
-                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+                    <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2">
+                        <span class="size-2 shrink-0 rounded-full {{ $statusDot }}" aria-hidden="true"></span>
                         @if ($row->cameras_total === 0)
-                            <span class="inline-flex items-center gap-1.5 text-ink-muted">
-                                <span class="size-2 rounded-full bg-surface-2 border border-line"></span>
-                                No cameras yet
-                            </span>
+                            <span class="text-ink-muted">No cameras yet</span>
                         @else
-                            <span class="inline-flex items-center gap-1.5">
-                                <span class="size-2 rounded-full {{ $row->cameras_offline === 0 && $row->cameras_online > 0 ? 'bg-positive' : ($row->cameras_online > 0 ? 'bg-warn' : 'bg-danger') }}"></span>
-                                <span class="font-semibold text-ink">{{ $row->cameras_total }}</span>
-                                <span class="text-ink-2">{{ \Illuminate\Support\Str::plural('camera', $row->cameras_total) }}</span>
-                            </span>
-                            <span class="text-ink-muted">·</span>
-                            <span class="text-ink-2">
-                                <span class="font-semibold {{ $row->cameras_online === $row->cameras_active ? 'text-positive' : 'text-warn' }}">{{ $row->cameras_online }}</span>
-                                / {{ $row->cameras_active }} online
+                            <span>
+                                <span class="font-semibold text-ink">{{ $row->cameras_online }}</span>
+                                of {{ $row->cameras_active }} {{ \Illuminate\Support\Str::plural('camera', $row->cameras_active) }} online
                             </span>
                         @endif
-                    </div>
+                        <span class="text-ink-muted" aria-hidden="true">·</span>
+                        <span>
+                            @if ($row->last_event_at)
+                                Last detection {{ $row->last_event_at->diffForHumans() }}
+                            @else
+                                No detections yet
+                            @endif
+                        </span>
+                    </p>
 
-                    <dl class="grid grid-cols-2 gap-3 text-[13px]">
+                    <dl class="grid grid-cols-2 gap-3 border-t border-line pt-3">
                         <div>
-                            <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">Visits today</dt>
-                            <dd class="mt-1 text-[17px] font-semibold text-ink tabular-nums">{{ number_format($row->visits_today) }}</dd>
+                            <dt class="text-[12.5px] text-ink-muted">Visits today</dt>
+                            <dd class="mt-0.5 text-[20px] font-semibold text-ink tabular-nums">{{ number_format($row->visits_today) }}</dd>
                         </div>
-                        @if ($row->has_exit_tracking)
-                            <div>
-                                <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">On site now</dt>
-                                <dd class="mt-1 text-[17px] font-semibold text-ink tabular-nums">
+                        <div>
+                            <dt class="text-[12.5px] text-ink-muted">On site now</dt>
+                            @if ($row->has_exit_tracking)
+                                <dd class="mt-0.5 text-[20px] font-semibold text-ink tabular-nums">
                                     {{ number_format($row->on_site) }}
                                     @if ($row->occupancy_percent !== null)
-                                        <span class="text-[12px] font-normal text-ink-muted">
-                                            · {{ rtrim(rtrim(number_format($row->occupancy_percent, 1), '0'), '.') }}%
+                                        <span class="text-[12.5px] font-normal text-ink-muted">
+                                            · {{ rtrim(rtrim(number_format($row->occupancy_percent, 1), '0'), '.') }}% full
                                         </span>
                                     @endif
                                 </dd>
-                            </div>
-                        @else
-                            <div>
-                                <dt class="text-[11px] uppercase tracking-[0.14em] text-ink-muted">On site now</dt>
+                            @else
                                 <dd class="mt-1 text-[13px] text-ink-muted">Needs an exit camera</dd>
-                            </div>
-                        @endif
+                            @endif
+                        </div>
                     </dl>
 
-                    <footer class="flex items-center justify-between gap-3 border-t border-line pt-3">
-                        <p class="text-[12px] text-ink-muted">
-                            @if ($row->last_event_at)
-                                Last read {{ $row->last_event_at->diffForHumans() }}
-                            @else
-                                No traffic recorded
-                            @endif
-                        </p>
-
-                        <div class="flex items-center gap-2">
-                            @unless ($isCurrent)
-                                <flux:button size="xs" variant="primary" wire:click="focus({{ $row->site->id }})">Open site</flux:button>
-                            @endunless
-                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $row->site->id }})">Edit</flux:button>
-                            <flux:button size="xs" variant="ghost" :href="route('cameras')" wire:navigate>Cameras</flux:button>
-                        </div>
+                    <footer class="mt-auto flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                        @unless ($isCurrent)
+                            <flux:button size="sm" variant="primary" wire:click="focus({{ $row->site->id }})">Open site</flux:button>
+                        @endunless
+                        <flux:button size="sm" variant="ghost" icon="pencil-square" wire:click="edit({{ $row->site->id }})">Edit</flux:button>
+                        <flux:button size="sm" variant="ghost" icon="video-camera" :href="route('cameras')" wire:navigate>Cameras</flux:button>
                     </footer>
                 </article>
             @endforeach
@@ -498,7 +483,7 @@ new #[Title('Sites')] class extends Component
                         inputmode="decimal"
                     />
                 </div>
-                <p class="text-[11px] text-ink-2">
+                <p class="text-[12.5px] text-ink-2">
                     Tip: right-click the spot on Google Maps and click the coordinates
                     to copy. Paste the whole pair into Latitude — we'll split it into
                     both fields for you.
@@ -506,7 +491,7 @@ new #[Title('Sites')] class extends Component
             </div>
 
             @if (! $editingId)
-                <div class="rounded-tf border border-line bg-surface-2 p-3 text-[12px] text-ink-2">
+                <div class="rounded-tf border border-line bg-surface-2 p-3 text-[12.5px] text-ink-2">
                     No fee is attached automatically. Your account manager will set the base price for this site
                     once the camera plan is confirmed; until then it's billed at R0, and you can keep adding cameras
                     in the meantime.

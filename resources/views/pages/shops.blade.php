@@ -17,9 +17,14 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
-new #[Title('Sub-accounts')] class extends Component {
+new #[Title('Shops & access')] class extends Component {
+    /** Which group is open: shops or operators. */
+    #[Url(as: 'section', keep: true)]
+    public string $section = 'shops';
+
     public bool $showInvite = false;
 
     public ?int $siteId = null;
@@ -45,6 +50,10 @@ new #[Title('Sub-accounts')] class extends Component {
     public function mount(): void
     {
         $this->monthlyAmount = (float) config('trafficflow.shop_monthly_amount_default');
+
+        if (! in_array($this->section, ['shops', 'operators'], true)) {
+            $this->section = 'shops';
+        }
     }
 
     protected function rules(): array
@@ -426,222 +435,237 @@ new #[Title('Sub-accounts')] class extends Component {
 }; ?>
 
 <div>
-    <x-page-header title="Sub-accounts" subtitle="Tenants you resell centre-wide analytics to">
+    <x-page-header title="Shops & access" subtitle="Shops you resell centre-wide analytics to, and the security staff who watch your sites.">
         <x-slot:actions>
-            <flux:button size="sm" variant="primary" wire:click="openInvite">Invite shop</flux:button>
+            @if ($section === 'operators')
+                <flux:button size="sm" variant="primary" icon="plus" wire:click="openInviteOperator">Invite operator</flux:button>
+            @else
+                <flux:button size="sm" variant="primary" icon="plus" wire:click="openInvite">Invite shop</flux:button>
+            @endif
         </x-slot:actions>
     </x-page-header>
 
-    @php $income = $this->tenantIncomeSplit; @endphp
-    <div class="mb-6 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        <x-metric label="Shops" :value="$this->shops->count()" delta="Total tenants" />
-        <x-metric
-            label="Paying"
-            :value="$this->shops->filter(fn ($shop) => $shop->shopSubscription?->status === App\Enums\SubscriptionStatus::Active)->count()"
-            delta="Adds to your platform bill"
-        />
-        <x-metric
-            label="You charge tenants"
-            :value="'R'.number_format($income['gross'], 2)"
-            :delta="'per month · you keep R'.number_format($income['owner_share'], 2).' after platform share'"
-            variant="positive"
-        />
-    </div>
+    @php
+        $income = $this->tenantIncomeSplit;
+        $vf = $this->variableFeeSummary;
+        $payingCount = $this->shops->filter(fn ($shop) => $shop->shopSubscription?->status === App\Enums\SubscriptionStatus::Active)->count();
+    @endphp
 
-    {{-- ── How the variable fee works ─────────────────────────────────────
-         Explains where the "Drives your variable fee" number on the metric
-         above actually goes, and shows the owner's real footprint so they
-         can eyeball what they'd pay next month. --}}
-    @php $vf = $this->variableFeeSummary; @endphp
-    <div class="mb-7 flex items-start gap-4 rounded-tf border border-accent/30 bg-accent-soft p-5 dark:bg-accent-soft/40">
-        <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent dark:bg-accent-2 text-white shadow-tf-sm">
-            <flux:icon icon="information-circle" class="size-5" />
-        </span>
-
-        <div class="flex-1 space-y-3 text-[13.5px] leading-relaxed">
+    {{-- Money in and money out are shown as separate amounts; every figure
+         comes straight from BillingCalculator / the variable-fee summary. --}}
+    <x-panel-card class="mb-4" title="Shop revenue this month" description="Estimated from current shop subscriptions.">
+        <dl class="grid grid-cols-2 gap-4 lg:grid-cols-4" data-test="shop-revenue">
             <div>
-                <p class="text-[15px] font-semibold text-ink">What the platform charges you for tenants</p>
-                <p class="mt-1 text-ink-2">
-                    The "You charge tenants" figure above is <em class="not-italic font-semibold text-ink">money coming
-                    in</em> — what your tenants pay you each month. Separately, the platform adds a small
-                    variable fee to <em class="not-italic font-semibold text-ink">your</em> monthly bill for
-                    every paying shop, at a per-camera rate:
+                <dt class="text-[13px] text-ink-2">Shop income</dt>
+                <dd class="mt-0.5 text-[22px] font-semibold tabular-nums text-ink">R{{ number_format($income['gross'], 2) }}</dd>
+                <p class="text-[12.5px] text-ink-muted">What paying shops pay you</p>
+            </div>
+            <div>
+                <dt class="text-[13px] text-ink-2">Platform share</dt>
+                <dd class="mt-0.5 text-[22px] font-semibold tabular-nums text-ink">R{{ number_format($income['platform_share'], 2) }}</dd>
+                <p class="text-[12.5px] text-ink-muted">Taken from shop income</p>
+            </div>
+            <div>
+                <dt class="text-[13px] text-ink-2">Revenue retained</dt>
+                <dd class="mt-0.5 text-[22px] font-semibold tabular-nums text-ink">R{{ number_format($income['owner_share'], 2) }}</dd>
+                <p class="text-[12.5px] text-ink-muted">Shop income after platform share</p>
+            </div>
+            <div>
+                <dt class="text-[13px] text-ink-2">Variable fee on your bill</dt>
+                <dd class="mt-0.5 text-[22px] font-semibold tabular-nums text-ink">R{{ number_format($vf['monthly'], 2) }}</dd>
+                <p class="text-[12.5px] text-ink-muted">{{ $payingCount }} paying {{ \Illuminate\Support\Str::plural('shop', $payingCount) }} · billed separately</p>
+            </div>
+        </dl>
+
+        <details class="tf-disclosure mt-3 border-t border-line text-[13px] text-ink-2">
+            <summary class="font-medium text-ink">How these amounts are calculated</summary>
+            <div class="space-y-3 pb-1">
+                <p>
+                    <span class="font-semibold text-ink">Platform share</span> is a percentage of what shops pay you, set by the platform.
+                    Revenue retained is shop income minus that share.
                 </p>
-            </div>
-
-            <div class="rounded-md border border-line bg-surface px-3 py-2.5 font-mono text-[13px] text-ink">
-                cameras × paying shops × R{{ number_format($this->variableRate, 2) }} = added to your platform bill
-            </div>
-
-            {{-- Live worked example using the owner's own totals so the
-                 number is theirs, not a hypothetical. --}}
-            <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                <p class="text-ink-2">
+                <p>
+                    <span class="font-semibold text-ink">Variable fee</span> is added to your own monthly platform bill for every paying shop, at a per-camera rate.
+                    It does not depend on what you charge the shop.
+                </p>
+                <p class="rounded-md border border-line bg-surface-2 px-3 py-2 font-mono text-[13px] text-ink">
+                    cameras × paying shops × R{{ number_format($this->variableRate, 2) }} = variable fee
+                </p>
+                <p>
                     <span class="font-semibold text-ink">Your footprint:</span>
-                    {{ $vf['cameras'] }} active camera{{ $vf['cameras'] === 1 ? '' : 's' }}
-                    across {{ $vf['sites'] }} site{{ $vf['sites'] === 1 ? '' : 's' }} ·
-                    {{ $vf['paying_shops'] }} paying shop{{ $vf['paying_shops'] === 1 ? '' : 's' }}
+                    {{ $vf['cameras'] }} active {{ \Illuminate\Support\Str::plural('camera', $vf['cameras']) }}
+                    across {{ $vf['sites'] }} {{ \Illuminate\Support\Str::plural('site', $vf['sites']) }} ·
+                    {{ $vf['paying_shops'] }} paying {{ \Illuminate\Support\Str::plural('shop', $vf['paying_shops']) }}
                     → {{ $vf['cameras'] }} × {{ $vf['paying_shops'] }} × R{{ number_format($this->variableRate, 2) }} =
-                    <span class="font-semibold text-ink">R{{ number_format($vf['monthly'], 2) }}/month</span>
-                    added to your platform bill.
+                    <span class="font-semibold text-ink">R{{ number_format($vf['monthly'], 2) }}/month</span>.
                 </p>
-                <a
-                    href="{{ route('billing') }}"
-                    wire:navigate
-                    class="inline-flex items-center gap-1 whitespace-nowrap text-[12.5px] font-semibold text-accent hover:underline"
-                >
-                    See full invoice
-                    <flux:icon icon="arrow-right" class="size-3.5" />
-                </a>
+                <p class="text-ink-muted">
+                    Only paying shops count — trialing and suspended shops are free.
+                    <a href="{{ route('billing') }}" wire:navigate class="font-medium text-accent hover:underline">See your billing estimate</a>
+                </p>
             </div>
+        </details>
+    </x-panel-card>
 
-            <p class="text-[12.5px] text-ink-muted">
-                Only paying shops count — trialing and suspended tenants are free. The fee scales by shop
-                count, not by how much you charge them. The platform's share of what you charge tenants
-                is set separately in Settings.
-            </p>
+    <x-panel-card padding="p-0">
+        <x-tabs
+            :tabs="[
+                'shops' => 'Shops ('.$this->shops->count().')',
+                'operators' => 'Security operators ('.$this->operators->count().')',
+            ]"
+            :current="$section"
+            model="section"
+            label="Access groups"
+            class="px-2"
+        />
+
+        <div class="space-y-6 p-4 sm:p-5" role="tabpanel" aria-labelledby="tab-{{ $section }}">
+            @if ($section === 'operators')
+                <section>
+                    <div class="mb-2">
+                        <h2 class="text-[15px] font-semibold text-ink">Active operators</h2>
+                        <p class="mt-0.5 text-[13px] text-ink-2">
+                            Guards or on-site staff who watch every site you run. They see cameras, security and the watchlist — no billing or shop tools.
+                            @php $operatorRate = number_format((float) config('trafficflow.security_operator_monthly_amount'), 2); @endphp
+                            R{{ $operatorRate }} per seat per month, added to your platform bill.
+                        </p>
+                    </div>
+                    <x-data-table
+                        :headers="['Name', 'Email', 'Joined', ['label' => '', 'align' => 'right']]"
+                        :is-empty="$this->operators->isEmpty()"
+                        empty="No operators yet. Invite your first to have someone watching plates in real time."
+                    >
+                        @foreach ($this->operators as $operator)
+                            <tr wire:key="operator-{{ $operator->id }}">
+                                <td class="border-b border-line py-2 font-medium">{{ $operator->name }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $operator->email }}</td>
+                                <td class="whitespace-nowrap border-b border-line py-2 text-ink-2">{{ $operator->created_at->format('j M Y') }}</td>
+                                <td class="border-b border-line py-2 text-right">
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
+                                        wire:click="removeOperator({{ $operator->id }})"
+                                        wire:confirm="Remove {{ $operator->name }}? Their login will stop working immediately."
+                                    >Remove</flux:button>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                    @if ($this->operators->isNotEmpty())
+                        <p class="mt-3 text-right text-[12.5px] text-ink-muted">
+                            {{ $this->operators->count() }} {{ \Illuminate\Support\Str::plural('seat', $this->operators->count()) }}
+                            × R{{ number_format((float) config('trafficflow.security_operator_monthly_amount'), 2) }}
+                            = <span class="font-semibold text-ink">R{{ number_format($this->operatorSeatCost, 2) }}/month</span>
+                        </p>
+                    @endif
+                </section>
+
+                <section>
+                    <h2 class="mb-2 text-[15px] font-semibold text-ink">Pending operator invitations</h2>
+                    <x-data-table
+                        :headers="['Name', 'Email', 'Expires', ['label' => '', 'align' => 'right']]"
+                        :is-empty="$this->operatorInvitations->isEmpty()"
+                        empty="No operator invitations outstanding."
+                    >
+                        @foreach ($this->operatorInvitations as $invitation)
+                            <tr wire:key="operator-invite-{{ $invitation->id }}">
+                                <td class="border-b border-line py-2 font-medium">{{ $invitation->name }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $invitation->email }}</td>
+                                <td class="border-b border-line py-2">
+                                    @if ($invitation->hasExpired())
+                                        <x-badge tone="danger">Expired</x-badge>
+                                    @else
+                                        <span class="text-ink-2">{{ $invitation->expires_at->diffForHumans() }}</span>
+                                    @endif
+                                </td>
+                                <td class="border-b border-line py-2 text-right">
+                                    <div class="flex justify-end gap-1 whitespace-nowrap">
+                                        <flux:button size="sm" variant="ghost" wire:click="resendOperatorInvitation({{ $invitation->id }})">Resend</flux:button>
+                                        <flux:button size="sm" variant="ghost" wire:click="revokeOperatorInvitation({{ $invitation->id }})">Revoke</flux:button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                </section>
+            @else
+                <section>
+                    <div class="mb-2">
+                        <h2 class="text-[15px] font-semibold text-ink">Shops</h2>
+                        <p class="mt-0.5 text-[13px] text-ink-2">
+                            {{ $this->shops->count() }} {{ \Illuminate\Support\Str::plural('shop', $this->shops->count()) }} · {{ $payingCount }} paying. Shops see aggregate analytics for their site only — never registration numbers.
+                        </p>
+                    </div>
+                    <x-data-table
+                        :headers="['Shop', 'Site', 'Users', 'Status', ['label' => 'Monthly', 'align' => 'right'], ['label' => '', 'align' => 'right']]"
+                        :is-empty="$this->shops->isEmpty()"
+                        empty="No shops yet. Invite your first shop to start reselling."
+                    >
+                        @foreach ($this->shops as $shop)
+                            @php
+                                $badge = $this->statusBadge($shop->shopSubscription);
+                            @endphp
+
+                            <tr wire:key="shop-{{ $shop->id }}">
+                                <td class="border-b border-line py-2 font-medium">{{ $shop->name }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $shop->parentSite?->name }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $shop->users_count }}</td>
+                                <td class="border-b border-line py-2"><x-badge :tone="$badge['tone']">{{ $badge['label'] }}</x-badge></td>
+                                <td class="border-b border-line py-2 text-right tabular-nums">
+                                    {{ $shop->shopSubscription ? 'R'.number_format((float) $shop->shopSubscription->monthly_amount, 2) : '—' }}
+                                </td>
+                                <td class="border-b border-line py-2 text-right">
+                                    @if ($shop->shopSubscription)
+                                        <flux:button
+                                            size="sm"
+                                            variant="ghost"
+                                            wire:click="toggleSuspension({{ $shop->id }})"
+                                            :wire:confirm="$shop->shopSubscription->grantsAccess() ? 'Suspend '.$shop->name.'? Their users lose access until you reactivate them.' : null"
+                                        >
+                                            {{ $shop->shopSubscription->grantsAccess() ? 'Suspend' : 'Reactivate' }}
+                                        </flux:button>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                </section>
+
+                <section>
+                    <h2 class="mb-2 text-[15px] font-semibold text-ink">Pending shop invitations</h2>
+                    <x-data-table
+                        :headers="['Shop', 'Email', 'Site', 'Expires', ['label' => 'Monthly', 'align' => 'right'], ['label' => '', 'align' => 'right']]"
+                        :is-empty="$this->invitations->isEmpty()"
+                        empty="No invitations outstanding."
+                    >
+                        @foreach ($this->invitations as $invitation)
+                            <tr wire:key="invite-{{ $invitation->id }}">
+                                <td class="border-b border-line py-2 font-medium">{{ $invitation->shop_name }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $invitation->email }}</td>
+                                <td class="border-b border-line py-2 text-ink-2">{{ $invitation->site->name }}</td>
+                                <td class="border-b border-line py-2">
+                                    @if ($invitation->hasExpired())
+                                        <x-badge tone="danger">Expired</x-badge>
+                                    @else
+                                        <span class="text-ink-2">{{ $invitation->expires_at->diffForHumans() }}</span>
+                                    @endif
+                                </td>
+                                <td class="border-b border-line py-2 text-right tabular-nums">
+                                    R{{ number_format((float) $invitation->monthly_amount, 2) }}
+                                </td>
+                                <td class="border-b border-line py-2 text-right">
+                                    <div class="flex justify-end gap-1 whitespace-nowrap">
+                                        <flux:button size="sm" variant="ghost" wire:click="resend({{ $invitation->id }})">Resend</flux:button>
+                                        <flux:button size="sm" variant="ghost" wire:click="revoke({{ $invitation->id }})">Revoke</flux:button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                </section>
+            @endif
         </div>
-    </div>
-
-    <x-panel heading="Shops">
-        <x-data-table
-            :headers="['Shop', 'Site', 'Users', 'Status', ['label' => 'Monthly', 'align' => 'right'], ['label' => '', 'align' => 'right']]"
-            :is-empty="$this->shops->isEmpty()"
-            empty="No shops yet. Invite your first tenant to start reselling."
-        >
-            @foreach ($this->shops as $shop)
-                @php
-                    $badge = $this->statusBadge($shop->shopSubscription);
-                @endphp
-
-                <tr wire:key="shop-{{ $shop->id }}">
-                    <td class="border-b border-line py-2 font-medium">{{ $shop->name }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $shop->parentSite?->name }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $shop->users_count }}</td>
-                    <td class="border-b border-line py-2"><x-badge :tone="$badge['tone']">{{ $badge['label'] }}</x-badge></td>
-                    <td class="border-b border-line py-2 text-right tabular-nums">
-                        {{ $shop->shopSubscription ? 'R'.number_format((float) $shop->shopSubscription->monthly_amount, 2) : '—' }}
-                    </td>
-                    <td class="border-b border-line py-2 text-right">
-                        @if ($shop->shopSubscription)
-                            <flux:button size="xs" variant="ghost" wire:click="toggleSuspension({{ $shop->id }})">
-                                {{ $shop->shopSubscription->grantsAccess() ? 'Suspend' : 'Reactivate' }}
-                            </flux:button>
-                        @endif
-                    </td>
-                </tr>
-            @endforeach
-        </x-data-table>
-    </x-panel>
-
-    <x-panel heading="Pending invitations">
-        <x-data-table
-            :headers="['Shop', 'Email', 'Site', 'Expires', ['label' => 'Monthly', 'align' => 'right'], ['label' => '', 'align' => 'right']]"
-            :is-empty="$this->invitations->isEmpty()"
-            empty="No invitations outstanding."
-        >
-            @foreach ($this->invitations as $invitation)
-                <tr wire:key="invite-{{ $invitation->id }}">
-                    <td class="border-b border-line py-2 font-medium">{{ $invitation->shop_name }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $invitation->email }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $invitation->site->name }}</td>
-                    <td class="border-b border-line py-2">
-                        @if ($invitation->hasExpired())
-                            <x-badge tone="danger">Expired</x-badge>
-                        @else
-                            <span class="text-ink-2">{{ $invitation->expires_at->diffForHumans() }}</span>
-                        @endif
-                    </td>
-                    <td class="border-b border-line py-2 text-right tabular-nums">
-                        R{{ number_format((float) $invitation->monthly_amount, 2) }}
-                    </td>
-                    <td class="border-b border-line py-2 text-right">
-                        <div class="flex justify-end gap-1">
-                            <flux:button size="xs" variant="ghost" wire:click="resend({{ $invitation->id }})">Resend</flux:button>
-                            <flux:button size="xs" variant="ghost" wire:click="revoke({{ $invitation->id }})">Revoke</flux:button>
-                        </div>
-                    </td>
-                </tr>
-            @endforeach
-        </x-data-table>
-    </x-panel>
-
-    {{-- ── Security operators ────────────────────────────────────────────
-         Guards the owner hires to watch plates day-to-day. Sits inside the
-         same organization (so it inherits the site list) but has a slim
-         permission set that keeps it away from billing and site config. --}}
-    <div class="mt-8 mb-3 flex items-end justify-between gap-3">
-        <div>
-            <h2 class="text-[15px] font-semibold text-ink">Security operators</h2>
-            <p class="mt-0.5 text-[13px] text-ink-2">
-                Guards or on-site staff who watch every site you run.
-                @php $operatorRate = number_format((float) config('trafficflow.security_operator_monthly_amount'), 2); @endphp
-                R{{ $operatorRate }} per seat per month, added to your platform bill.
-            </p>
-        </div>
-        <flux:button size="sm" variant="primary" wire:click="openInviteOperator">Invite operator</flux:button>
-    </div>
-
-    <x-panel heading="Active operators">
-        <x-data-table
-            :headers="['Name', 'Email', 'Joined', ['label' => '', 'align' => 'right']]"
-            :is-empty="$this->operators->isEmpty()"
-            empty="No operators yet. Invite your first to have someone watching plates in real time."
-        >
-            @foreach ($this->operators as $operator)
-                <tr wire:key="operator-{{ $operator->id }}">
-                    <td class="border-b border-line py-2 font-medium">{{ $operator->name }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $operator->email }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $operator->created_at->format('j M Y') }}</td>
-                    <td class="border-b border-line py-2 text-right">
-                        <flux:button
-                            size="xs"
-                            variant="ghost"
-                            wire:click="removeOperator({{ $operator->id }})"
-                            wire:confirm="Remove {{ $operator->name }}? Their login will stop working immediately."
-                        >Remove</flux:button>
-                    </td>
-                </tr>
-            @endforeach
-        </x-data-table>
-        @if ($this->operators->isNotEmpty())
-            {{-- Rough forecast so the owner isn't surprised when the seats
-                 show up on the next invoice. --}}
-            <p class="mt-3 text-right text-[12.5px] text-ink-muted">
-                {{ $this->operators->count() }} seat{{ $this->operators->count() === 1 ? '' : 's' }}
-                × R{{ number_format((float) config('trafficflow.security_operator_monthly_amount'), 2) }}
-                = <span class="font-semibold text-ink">R{{ number_format($this->operatorSeatCost, 2) }}/month</span>
-            </p>
-        @endif
-    </x-panel>
-
-    <x-panel heading="Pending operator invitations">
-        <x-data-table
-            :headers="['Name', 'Email', 'Expires', ['label' => '', 'align' => 'right']]"
-            :is-empty="$this->operatorInvitations->isEmpty()"
-            empty="No operator invitations outstanding."
-        >
-            @foreach ($this->operatorInvitations as $invitation)
-                <tr wire:key="operator-invite-{{ $invitation->id }}">
-                    <td class="border-b border-line py-2 font-medium">{{ $invitation->name }}</td>
-                    <td class="border-b border-line py-2 text-ink-2">{{ $invitation->email }}</td>
-                    <td class="border-b border-line py-2">
-                        @if ($invitation->hasExpired())
-                            <x-badge tone="danger">Expired</x-badge>
-                        @else
-                            <span class="text-ink-2">{{ $invitation->expires_at->diffForHumans() }}</span>
-                        @endif
-                    </td>
-                    <td class="border-b border-line py-2 text-right">
-                        <div class="flex justify-end gap-1">
-                            <flux:button size="xs" variant="ghost" wire:click="resendOperatorInvitation({{ $invitation->id }})">Resend</flux:button>
-                            <flux:button size="xs" variant="ghost" wire:click="revokeOperatorInvitation({{ $invitation->id }})">Revoke</flux:button>
-                        </div>
-                    </td>
-                </tr>
-            @endforeach
-        </x-data-table>
-    </x-panel>
+    </x-panel-card>
 
     <flux:modal wire:model.self="showInviteOperator" class="md:w-[28rem]">
         <form wire:submit="inviteOperator" class="space-y-5">

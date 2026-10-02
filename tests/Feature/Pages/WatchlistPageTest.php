@@ -109,6 +109,22 @@ it('renders one compact empty state when the watchlist is empty', function () {
         ->assertDontSee('Watchlist (0)');
 });
 
+it('offers exactly one Add plate action whether the list is empty or not', function () {
+    expect(substr_count(Livewire::test('pages::watchlist')->html(), 'data-test="add-plate"'))->toBe(1);
+
+    WatchlistPlate::factory()->block()->for($this->site)->create(['plate_number' => 'BLOCKONE']);
+
+    expect(substr_count(Livewire::test('pages::watchlist')->html(), 'data-test="add-plate"'))->toBe(1);
+});
+
+it('says plainly that a Blocked label does not control a gate', function () {
+    WatchlistPlate::factory()->block()->for($this->site)->create(['plate_number' => 'BLOCKONE']);
+
+    Livewire::test('pages::watchlist')
+        ->assertSee('Blocked')
+        ->assertSee('CentreVision does not control gates or barriers');
+});
+
 it('filters entries by kind through the filter chips', function () {
     // Plates without the letters/digits/letters SA pattern stay as-is
     // through PlateNumber::forDisplay, which is what we want here — the

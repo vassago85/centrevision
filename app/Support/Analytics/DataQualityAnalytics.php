@@ -23,6 +23,12 @@ class DataQualityAnalytics
      * @return array{
      *   reads: int,
      *   pairable_reads: int,
+     *   excluded_duplicates: int,
+     *   excluded_unreadable: int,
+     *   excluded_no_direction: int,
+     *   eligible_entries: int,
+     *   eligible_exits: int,
+     *   open_visits: int,
      *   entries: int,
      *   exits: int,
      *   paired_visits: int,
@@ -80,6 +86,26 @@ class DataQualityAnalytics
             })
             ->count();
 
+        // Why received reads are not eligible, one reason per read so the
+        // three counts add up to reads − pairable_reads. Checked in this
+        // order: a duplicate photo first, then an unreadable plate, then a
+        // missing direction.
+        $unknown = PlateNumber::normalise('unknown');
+        $breakdown = PlateEvent::query()
+            ->whereBetween('captured_at', [$range->from, $range->to])
+            ->selectRaw('count(*) filter (where superseded_by_event_id is not null) as duplicates')
+            ->selectRaw('count(*) filter (where superseded_by_event_id is null and plate_number = ?) as unreadable', [$unknown])
+            ->selectRaw('count(*) filter (where superseded_by_event_id is null and plate_number != ? and direction is null) as no_direction', [$unknown])
+            ->selectRaw("count(*) filter (where superseded_by_event_id is null and plate_number != ? and direction = 'in') as eligible_entries", [$unknown])
+            ->selectRaw("count(*) filter (where superseded_by_event_id is null and plate_number != ? and direction = 'out') as eligible_exits", [$unknown])
+            ->toBase()
+            ->first();
+
+        $openVisits = Visit::query()
+            ->open()
+            ->enteredBetween($range->from, $range->to)
+            ->count();
+
         $cameras = Camera::query()->where('is_active', true)->get();
         $offline = $cameras->filter(fn (Camera $camera) => ! $camera->isReachable())->count();
         $total = $cameras->count();
@@ -87,6 +113,12 @@ class DataQualityAnalytics
         return [
             'reads' => $reads,
             'pairable_reads' => $pairable,
+            'excluded_duplicates' => (int) ($breakdown->duplicates ?? 0),
+            'excluded_unreadable' => (int) ($breakdown->unreadable ?? 0),
+            'excluded_no_direction' => (int) ($breakdown->no_direction ?? 0),
+            'eligible_entries' => (int) ($breakdown->eligible_entries ?? 0),
+            'eligible_exits' => (int) ($breakdown->eligible_exits ?? 0),
+            'open_visits' => $openVisits,
             'entries' => $entries,
             'exits' => $exits,
             'paired_visits' => $paired,

@@ -14,6 +14,7 @@ use Flux\Flux;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
@@ -153,19 +154,27 @@ new #[Title('Activity')] class extends Component
             ->all();
     }
 
+    #[Computed]
+    public function viewingCaptureEvent(): ?PlateEvent
+    {
+        if ($this->viewingCaptureEventId === null) {
+            return null;
+        }
+
+        $event = PlateEvent::query()->with('camera')->find($this->viewingCaptureEventId);
+
+        return $event === null || auth()->user()?->cannot('view', $event) ? null : $event;
+    }
+
     /**
      * @return list<string>
      */
     #[Computed]
     public function viewingCaptureUrls(): array
     {
-        if ($this->viewingCaptureEventId === null) {
-            return [];
-        }
+        $event = $this->viewingCaptureEvent;
 
-        $event = PlateEvent::query()->with('camera')->find($this->viewingCaptureEventId);
-
-        if ($event === null || auth()->user()?->cannot('view', $event)) {
+        if ($event === null) {
             return [];
         }
 
@@ -178,6 +187,21 @@ new #[Title('Activity')] class extends Component
         return collect(range(0, $count - 1))
             ->map(fn (int $index) => route('activity.captures.show', [$event, $index]))
             ->all();
+    }
+
+    /**
+     * How long camera photos stay on disk. The detection record itself
+     * follows the site's data-retention period, which is much longer.
+     */
+    #[Computed]
+    public function captureRetentionLabel(): string
+    {
+        return PlateCaptureStore::retentionLabel();
+    }
+
+    public function photoExpired(PlateEvent $event): bool
+    {
+        return $event->captured_at->lt(now()->subHours(PlateCaptureStore::retentionHours()));
     }
 
     public function viewCaptures(int $eventId): void
@@ -336,16 +360,20 @@ new #[Title('Activity')] class extends Component
             @if (app(Tenancy::class)->currentSite() !== null)
                 <flux:button
                     size="sm"
-                    variant="ghost"
                     icon="arrow-down-tray"
                     wire:click="downloadDay"
+                    class="max-sm:min-h-11"
                 >Download {{ $this->toDate }}</flux:button>
             @endif
         </x-slot:actions>
     </x-page-header>
 
-    <x-panel heading="Filters">
-        <div class="grid gap-3 rounded-tf border border-line bg-surface p-4 md:grid-cols-4">
+    <section aria-label="Filters" class="mb-4 rounded-tf border border-line bg-surface p-4">
+        <div @class([
+            'grid gap-3 sm:grid-cols-2',
+            'lg:grid-cols-4' => $this->hasMultipleCameras,
+            'lg:grid-cols-3' => ! $this->hasMultipleCameras,
+        ])>
             <flux:input
                 wire:model.live.debounce.300ms="fromDate"
                 type="date"
@@ -373,13 +401,28 @@ new #[Title('Activity')] class extends Component
                 wire:model.live.debounce.500ms="plateSearch"
                 label="Plate"
                 placeholder="Search e.g. JD45GP"
+                icon="magnifying-glass"
             />
         </div>
-    </x-panel>
+
+        <p class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-3 text-[13px] text-ink-2" data-test="activity-totals">
+            <span><span class="font-semibold tabular-nums text-ink">{{ number_format($this->events->total()) }}</span> {{ Str::plural('detection', $this->events->total()) }}</span>
+            <span><span class="font-semibold tabular-nums text-ink">{{ number_format($this->uniquePlateCount) }}</span> unique {{ Str::plural('vehicle', $this->uniquePlateCount) }}</span>
+            <span>
+                @if ($this->cameraId)
+                    1 camera selected · {{ optional($this->cameras->firstWhere('id', $this->cameraId))->name }}
+                @elseif ($this->hasMultipleCameras)
+                    {{ $this->cameras->count() }} active cameras
+                @else
+                    {{ $this->cameras->count() }} {{ Str::plural('camera', $this->cameras->count()) }}
+                @endif
+            </span>
+        </p>
+    </section>
 
     @if ($this->focusedPlate)
-        <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3 text-[13px]">
-            <div class="flex items-center gap-3">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-tf border border-accent/20 bg-accent-soft px-4 py-2.5 text-[13px]">
+            <div class="flex items-center gap-2">
                 <flux:icon icon="magnifying-glass" class="size-4 text-accent" />
                 <span class="text-ink-2">
                     Showing history for
@@ -387,30 +430,16 @@ new #[Title('Activity')] class extends Component
                 </span>
             </div>
             <div class="flex items-center gap-2">
-                <flux:button size="xs" variant="ghost" wire:click="watchFocusedPlate">Add to watchlist</flux:button>
-                <flux:button size="xs" variant="ghost" wire:click="clearPlateFocus">Clear</flux:button>
+                <flux:button size="sm" variant="ghost" icon="eye" wire:click="watchFocusedPlate">Add to watchlist</flux:button>
+                <flux:button size="sm" variant="ghost" icon="x-mark" wire:click="clearPlateFocus">Clear</flux:button>
             </div>
         </div>
     @endif
 
-    <div class="mb-7 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        <x-metric
-            label="Events"
-            :value="number_format($this->events->total())"
-            :delta="'range: '.($this->fromDate).' → '.($this->toDate)"
-        />
-        <x-metric
-            label="Unique plates"
-            :value="number_format($this->uniquePlateCount)"
-        />
-        <x-metric
-            label="Cameras"
-            :value="$this->hasMultipleCameras ? ($this->cameraId ? '1 selected' : $this->cameras->count().' active') : $this->cameras->count()"
-            :delta="$this->cameraId ? optional($this->cameras->firstWhere('id', $this->cameraId))->name : null"
-        />
-    </div>
-
-    <x-panel :heading="$this->focusedPlate ? 'Plate history' : 'All detections'">
+    <x-panel-card
+        :title="$this->focusedPlate ? 'Plate history' : 'All detections'"
+        :description="'Camera photos are kept for '.$this->captureRetentionLabel.'. Detection records follow your data-retention period.'"
+    >
         <x-data-table
             :headers="[
                 'Time',
@@ -427,29 +456,28 @@ new #[Title('Activity')] class extends Component
                 @php
                     $isIn = $event->direction === PlateDirection::In;
                     $conf = $event->confidence === null ? null : (int) round($event->confidence * 100);
+                    $photos = $this->captureCounts[$event->id] ?? 0;
                 @endphp
                 <tr wire:key="event-{{ $event->id }}">
-                    <td class="border-b border-line py-2 tabular-nums text-ink-2">
+                    <td class="whitespace-nowrap border-b border-line py-2 tabular-nums text-ink-2">
                         {{ $event->captured_at->format('D d M · H:i') }}
                     </td>
                     <td class="border-b border-line py-2">
-                        <span class="inline-flex items-center gap-2">
-                            <button
-                                type="button"
-                                wire:click="focusOnPlate('{{ $event->plate_number }}')"
-                                class="font-mono font-semibold text-ink hover:text-accent"
-                            >{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</button>
-                        </span>
+                        <button
+                            type="button"
+                            wire:click="focusOnPlate('{{ $event->plate_number }}')"
+                            class="rounded font-mono font-semibold whitespace-nowrap text-ink hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                        >{{ App\Support\PlateNumber::forDisplay($event->plate_number) }}</button>
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">
                         {{ $event->camera?->name ?? '—' }}
                     </td>
                     <td class="border-b border-line py-2">
                         @if ($event->direction === null)
-                            <span class="text-[11.5px] text-ink-muted">—</span>
+                            <span class="text-[12.5px] text-ink-muted">Unknown</span>
                         @else
                             <span @class([
-                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]',
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-semibold',
                                 'bg-accent-soft text-accent' => $isIn,
                                 'bg-warning-soft text-warning' => ! $isIn,
                             ])>
@@ -460,29 +488,32 @@ new #[Title('Activity')] class extends Component
                     </td>
                     <td class="border-b border-line py-2 text-right">
                         @if ($conf === null)
-                            <span class="text-[11.5px] text-ink-muted">—</span>
+                            <span class="text-[12.5px] text-ink-muted">—</span>
                         @else
                             <span @class([
-                                'text-[11.5px] tabular-nums',
+                                'text-[12.5px] tabular-nums',
                                 'text-warning' => $conf < 85,
                                 'text-ink-2' => $conf >= 85,
                             ])>{{ $conf }}%</span>
                         @endif
                     </td>
                     <td class="border-b border-line py-2 text-right">
-                        <div class="flex items-center justify-end gap-1">
-                            @if (($this->captureCounts[$event->id] ?? 0) > 0)
+                        <div class="flex items-center justify-end gap-1 whitespace-nowrap">
+                            @if ($photos > 0)
                                 <flux:button
-                                    size="xs"
+                                    size="sm"
                                     variant="ghost"
                                     icon="photo"
                                     wire:click="viewCaptures({{ $event->id }})"
                                     data-test="view-captures-{{ $event->id }}"
+                                    :aria-label="'View '.$photos.' '.Str::plural('photo', $photos).' for '.App\Support\PlateNumber::forDisplay($event->plate_number)"
                                 >Photos</flux:button>
+                            @elseif ($this->photoExpired($event))
+                                <span class="px-2 text-[12.5px] text-ink-muted" title="Photos are removed after {{ $this->captureRetentionLabel }}">Photo expired</span>
                             @endif
                             @if ($this->focusedPlate === null)
                                 <flux:button
-                                    size="xs"
+                                    size="sm"
                                     variant="ghost"
                                     wire:click="focusOnPlate('{{ $event->plate_number }}')"
                                 >History</flux:button>
@@ -498,19 +529,9 @@ new #[Title('Activity')] class extends Component
                 {{ $this->events->links() }}
             </div>
         @endif
-    </x-panel>
+    </x-panel-card>
 
-    <flux:modal wire:model.self="viewingCaptureEventId" class="md:w-[40rem]" @close="$wire.closeCaptures()">
-        <div class="space-y-3">
-            <flux:heading size="lg">{{ __('Camera photos') }}</flux:heading>
-            <flux:text class="text-ink-2">
-                {{ __('Kept for 24 hours, then deleted. The plate record stays in the database.') }}
-            </flux:text>
-            @forelse ($this->viewingCaptureUrls as $url)
-                <img src="{{ $url }}" alt="" class="w-full rounded-lg border border-line bg-surface-2" />
-            @empty
-                <p class="text-[13px] text-ink-muted">{{ __('These photos have already been removed.') }}</p>
-            @endforelse
-        </div>
+    <flux:modal wire:model.self="viewingCaptureEventId" class="w-full md:w-[52rem]" @close="$wire.closeCaptures()">
+        <x-photo-viewer :event="$this->viewingCaptureEvent" :urls="$this->viewingCaptureUrls" :retention="$this->captureRetentionLabel" />
     </flux:modal>
 </div>

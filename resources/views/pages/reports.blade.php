@@ -12,6 +12,7 @@ use App\Support\Reporting\ReportExporter;
 use App\Support\Reporting\TrafficReport;
 use App\Support\Tenancy;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Livewire\Attributes\Computed;
@@ -20,6 +21,22 @@ use Livewire\Attributes\Url;
 use Livewire\Component;
 
 new #[Title('Reports')] class extends Component {
+    /**
+     * Where the six pre-redesign sections now live, so bookmarked
+     * `?section=` links still open the matching tab.
+     */
+    public const LEGACY_SECTIONS = [
+        'overview' => 'summary',
+        'visits' => 'traffic',
+        'occupancy' => 'traffic',
+        'dwell' => 'behaviour',
+        'behaviour' => 'behaviour',
+        'security' => 'security',
+        'quality' => 'health',
+    ];
+
+    public const DAILY_PAGE_SIZE = 10;
+
     #[Url(as: 'range', keep: true)]
     public string $rangeKey = '30d';
 
@@ -29,8 +46,8 @@ new #[Title('Reports')] class extends Component {
     #[Url(as: 'audience', keep: true)]
     public string $audience = 'shopper';
 
-    #[Url(as: 'section', keep: true)]
-    public string $section = 'overview';
+    #[Url(as: 'tab', keep: true)]
+    public string $tab = 'summary';
 
     #[Url(as: 'metric', keep: true)]
     public string $chartMetric = 'visits';
@@ -42,13 +59,20 @@ new #[Title('Reports')] class extends Component {
     public ?string $toDate = null;
 
     /**
-     * When true, wet days ({@see DayContextAnalytics::WET_LABELS}) are dropped
-     * from the visits-per-day chart. Off by default so every headline number
-     * stays comparable to what the Reports page has always shown; owners
-     * opt in when they want a weather-normalised trend.
+     * Drops wet days ({@see DayContextAnalytics::WET_LABELS}) from the daily
+     * trend chart only. Totals, other charts and exports are unaffected.
      */
     #[Url(as: 'exclude_wet', keep: true)]
     public bool $excludeWet = false;
+
+    /**
+     * Drops public holidays from the daily trend chart only, so a run of
+     * holidays doesn't make an ordinary week look thin.
+     */
+    #[Url(as: 'exclude_holidays', keep: true)]
+    public bool $excludeHolidays = false;
+
+    public int $dailyPage = 1;
 
     public function mount(): void
     {
@@ -69,7 +93,15 @@ new #[Title('Reports')] class extends Component {
             $this->toDate ??= now()->toDateString();
         }
 
-        $this->normaliseSection();
+        // Once the page has written `tab` into the URL it wins, so a reload
+        // after switching tabs doesn't snap back to the old `section` link.
+        $legacy = request()->query('section');
+
+        if (! request()->has('tab') && is_string($legacy) && isset(self::LEGACY_SECTIONS[$legacy])) {
+            $this->tab = self::LEGACY_SECTIONS[$legacy];
+        }
+
+        $this->normaliseTab();
         $this->normaliseMetric();
     }
 
@@ -79,16 +111,38 @@ new #[Title('Reports')] class extends Component {
             $this->fromDate ??= now()->subDays(29)->toDateString();
             $this->toDate ??= now()->toDateString();
         }
+
+        $this->dailyPage = 1;
     }
 
-    public function updatedSection(): void
+    public function updatedFromDate(): void
     {
-        $this->normaliseSection();
+        $this->dailyPage = 1;
+    }
+
+    public function updatedToDate(): void
+    {
+        $this->dailyPage = 1;
+    }
+
+    public function updatedTab(): void
+    {
+        $this->normaliseTab();
     }
 
     public function updatedChartMetric(): void
     {
         $this->normaliseMetric();
+    }
+
+    public function previousDailyPage(): void
+    {
+        $this->dailyPage = max(1, $this->dailyPage - 1);
+    }
+
+    public function nextDailyPage(): void
+    {
+        $this->dailyPage = min($this->dailyPageCount, $this->dailyPage + 1);
     }
 
     #[Computed]
@@ -104,10 +158,26 @@ new #[Title('Reports')] class extends Component {
         return DateRange::make($this->rangeKey);
     }
 
+    /**
+     * The comparison window, cut to the same elapsed time while the selected
+     * period is still running so a partial day never faces a full one.
+     */
     #[Computed]
     public function comparison(): ?DateRange
     {
-        return $this->range()->comparisonRange($this->compareKey);
+        return $this->range()->elapsedComparisonRange($this->compareKey);
+    }
+
+    #[Computed]
+    public function comparisonCaption(): ?string
+    {
+        if ($this->comparison === null) {
+            return null;
+        }
+
+        $label = 'vs '.strtolower(DateRange::comparisonOptions()[$this->compareKey] ?? 'previous period');
+
+        return $this->range->isInProgress() ? $label.' to the same point' : $label;
     }
 
     #[Computed]
@@ -135,22 +205,26 @@ new #[Title('Reports')] class extends Component {
     }
 
     #[Computed]
-    public function sections(): array
+    public function canManageSchedule(): bool
+    {
+        return auth()->user()->isOwnerAdmin();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    #[Computed]
+    public function tabs(): array
     {
         $items = [
-            'overview' => 'Overview',
-            'visits' => 'Visits',
-            'dwell' => 'Dwell',
-            'behaviour' => 'Visitor behaviour',
+            'summary' => 'Summary',
+            'traffic' => 'Traffic patterns',
+            'behaviour' => 'Visit behaviour',
         ];
-
-        if ($this->hasOccupancy) {
-            $items['occupancy'] = 'Occupancy';
-        }
 
         if ($this->canSeeOps) {
             $items['security'] = 'Security';
-            $items['quality'] = 'Data quality';
+            $items['health'] = 'System health';
         }
 
         return $items;
@@ -162,124 +236,134 @@ new #[Title('Reports')] class extends Component {
         return $this->analytics()->visitsByDay($this->range());
     }
 
+    #[Computed]
+    public function dailyPageCount(): int
+    {
+        return max(1, (int) ceil($this->daily->count() / self::DAILY_PAGE_SIZE));
+    }
+
     /**
-     * The Reports overview headline row. Kept deliberately short — five
-     * cards that answer the "how did the centre trade?" question.
-     * Everything else lives in {@see secondaryKpis()} so the row above
-     * this one is not competing with itself.
-     *
-     * @return array<int, array<string, mixed>>
+     * Newest day first, one page at a time. Exports still carry every day.
      */
     #[Computed]
-    public function kpis(): array
+    public function dailyRows(): Collection
+    {
+        $page = min(max(1, $this->dailyPage), $this->dailyPageCount);
+
+        return $this->daily->reverse()->values()->forPage($page, self::DAILY_PAGE_SIZE)->values();
+    }
+
+    #[Computed]
+    public function dwell(): array
+    {
+        return $this->analytics()->dwellSummary($this->range());
+    }
+
+    #[Computed]
+    public function lowStaySample(): bool
+    {
+        return TrafficAnalytics::isLowStaySample($this->dwell['sample']);
+    }
+
+    #[Computed]
+    public function unique(): int
+    {
+        return $this->analytics()->uniqueVehicles($this->range());
+    }
+
+    #[Computed]
+    public function returning(): ?int
+    {
+        return $this->analytics()->returningVehicles($this->range());
+    }
+
+    #[Computed]
+    public function returnRate(): ?float
+    {
+        return $this->analytics()->returningVehicleRate($this->range());
+    }
+
+    /**
+     * Summary headline: visits, unique vehicles, returning share and typical
+     * stay. Return rate keeps the visitor-based definition used everywhere.
+     *
+     * @return array<int, array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}>
+     */
+    #[Computed]
+    public function summaryCards(): array
     {
         $range = $this->range();
         $previous = $this->comparison();
         $a = $this->analytics();
 
         $visits = $a->totalVisits($range);
-        $unique = $a->uniqueVehicles($range);
-        $returnRate = $a->returningVehicleRate($range);
-        $dwell = $a->dwellSummary($range);
-
-        $daysInRange = max(1, $this->daily()->count());
-        $dailyAverage = (int) round($visits / $daysInRange);
-        $prevDailyAverage = $previous
-            ? $a->totalVisits($previous) / max(1, $previous->days())
-            : null;
 
         return [
-            $this->kpi(
+            $this->card(
                 'Visits',
                 number_format($visits),
-                $visits,
-                $previous ? $a->totalVisits($previous) : null,
-                null,
+                'arrow-right-end-on-rectangle',
+                $this->delta($visits, $previous ? $a->totalVisits($previous) : null),
+                'Every arrival, including repeat trips',
+            ),
+            $this->card(
+                'Unique vehicles',
+                number_format($this->unique),
                 'truck',
+                $this->delta($this->unique, $previous ? $a->uniqueVehicles($previous) : null),
+                'Distinct registrations detected',
             ),
-            $this->kpi(
-                'Unique Visitors',
-                number_format($unique),
-                $unique,
-                $previous ? $a->uniqueVehicles($previous) : null,
-                null,
-                'user-group',
-            ),
-            $this->kpi(
-                'Return Rate',
-                $returnRate === null ? '—' : $returnRate.'%',
-                $returnRate,
-                $previous ? $a->returningVehicleRate($previous) : null,
-                // A dash here means the site has no history before the
-                // window opens, so "returning" cannot be measured yet.
-                // Spell that out so the card doesn't look like a broken 0 %.
-                $returnRate === null ? 'Not enough history yet' : null,
+            $this->card(
+                'Returning share',
+                $this->returnRate === null ? '—' : $this->returnRate.'%',
                 'arrow-path',
+                $this->returnRate === null ? null : $this->delta($this->returnRate, $previous ? $a->returningVehicleRate($previous) : null),
+                $this->returnRate === null
+                    ? 'Not enough history before this period yet'
+                    : number_format($this->returning ?? 0).' of '.number_format($this->unique).' vehicles were seen before this period',
             ),
-            $this->kpi(
-                'Average Dwell',
-                $dwell['average'] === null ? '—' : $dwell['average'].' min',
-                $dwell['average'],
-                $previous ? $a->dwellSummary($previous)['average'] : null,
-                null,
-                'clock',
-            ),
-            $this->kpi(
-                'Daily Average',
-                number_format($dailyAverage),
-                $dailyAverage,
-                $prevDailyAverage,
-                null,
-                'chart-bar',
-            ),
+            $this->stayCard(),
         ];
     }
 
     /**
-     * Supporting metrics — busiest day, peak hour, median dwell, excluded
-     * staff visits, returning-visitor count. All useful, none big enough
-     * to deserve a full KPI card. Rendered as compact {@see \Illuminate\View\ComponentAttributeBag metric} rows so they
-     * do not visually compete with Visits or Unique Visitors above.
-     *
-     * @return array<int, array<string, string|int|null>>
+     * @return array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}
+     */
+    protected function stayCard(): array
+    {
+        $dwell = $this->dwell;
+
+        if ($dwell['sample'] === 0 || $dwell['median'] === null) {
+            return $this->card('Typical stay', '—', 'clock', null, 'No completed visits with a matched exit in this period');
+        }
+
+        $basis = 'Median of '.number_format($dwell['sample']).' completed '.Str::plural('visit', $dwell['sample']);
+
+        if ($this->lowStaySample) {
+            return $this->card('Typical stay', $dwell['median'].' min', 'clock', null, $basis, 'Low sample — not compared with the previous period.');
+        }
+
+        $previous = $this->comparison ? $this->analytics()->dwellSummary($this->comparison) : null;
+        $delta = $previous === null || TrafficAnalytics::isLowStaySample($previous['sample'])
+            ? null
+            : $this->delta($dwell['median'], $previous['median']);
+
+        return $this->card('Typical stay', $dwell['median'].' min', 'clock', $delta, $basis.' · average '.$dwell['average'].' min');
+    }
+
+    /**
+     * @return array{busiest: array<string, mixed>|null, peak: array<string, mixed>|null, daily_average: int, excluded: int}
      */
     #[Computed]
-    public function secondaryKpis(): array
+    public function highlights(): array
     {
-        $range = $this->range();
-        $a = $this->analytics();
-        $dwell = $a->dwellSummary($range);
-        $peak = $a->peakHour($range);
-        $busiest = $this->daily()->sortByDesc('count')->first();
-        $excluded = $a->excludedVisitCount($range);
-        $returning = $a->returningVehicles($range);
+        $visits = $this->daily->sum('count');
 
         return [
-            [
-                'label' => 'Busiest day',
-                'value' => $busiest['label'] ?? '—',
-                'detail' => $busiest ? number_format($busiest['count']).' '.Str::plural('visit', $busiest['count']) : null,
-            ],
-            [
-                'label' => 'Peak hour',
-                'value' => $peak['label'] ?? '—',
-                'detail' => $peak === null ? null : number_format($peak['count']).' '.Str::plural('visit', $peak['count']),
-            ],
-            [
-                'label' => 'Median dwell',
-                'value' => $dwell['median'] === null ? '—' : $dwell['median'].' min',
-                'detail' => null,
-            ],
-            [
-                'label' => 'Returning visitors',
-                'value' => $returning === null ? '—' : number_format($returning),
-                'detail' => $returning === null ? 'Not enough history yet' : null,
-            ],
-            [
-                'label' => 'Staff / regular excluded',
-                'value' => number_format($excluded),
-                'detail' => null,
-            ],
+            'busiest' => $visits > 0 ? $this->daily->sortByDesc('count')->first() : null,
+            'peak' => $this->analytics()->peakHour($this->range()),
+            'daily_average' => (int) round($visits / max(1, $this->daily->count())),
+            'excluded' => $this->analytics()->excludedVisitCount($this->range()),
         ];
     }
 
@@ -294,33 +378,49 @@ new #[Title('Reports')] class extends Component {
             ? $this->occupancy()->series($this->range())
             : $this->analytics()->seriesOverTime($this->range(), $metric);
 
+        // The chart pairs each bucket with the same bucket of the full
+        // comparison window, so it uses the un-cut window; the headline
+        // figures above use the elapsed-matched one.
+        $chartComparison = $this->range()->comparisonRange($this->compareKey);
         $previous = collect();
 
-        if ($this->comparison) {
+        if ($chartComparison) {
             $previous = $metric === 'occupancy'
-                ? $this->occupancy()->series($this->comparison)
-                : $this->analytics()->seriesOverTime($this->comparison, $metric);
+                ? $this->occupancy()->series($chartComparison)
+                : $this->analytics()->seriesOverTime($chartComparison, $metric);
         }
 
-        $paired = $current->values()->map(function (array $point, int $index) use ($previous): array {
+        $now = now();
+        $paired = $current->values()->map(function (array $point, int $index) use ($previous, $now): array {
+            $isFuture = Date::parse($point['date'])->gt($now);
+
             return [
                 ...$point,
+                // Buckets that have not started are gaps, not measured zeroes.
+                'count' => $isFuture ? null : $point['count'],
                 'previous' => (int) ($previous[$index]['count'] ?? 0),
             ];
         });
 
-        // Weather-normalisation. Only applies to daily-grain series — an
-        // hourly chart already lives inside a single day so "exclude wet
-        // days" has no meaning at that grain, and a weekly-grain bar can't
-        // be cleanly split by daily weather either.
-        if ($this->excludeWet && $this->range()->grain() === 'day') {
-            $wetDates = array_flip(
-                app(DayContextAnalytics::class)->wetDates($this->range()),
-            );
+        // Exclusions only make sense at daily grain: an hourly chart lives
+        // inside one day, and a weekly bar can't be split by daily weather.
+        if ($this->range()->grain() === 'day') {
+            $context = app(DayContextAnalytics::class);
+            $skip = [];
 
-            $paired = $paired
-                ->reject(fn (array $day) => isset($wetDates[substr((string) $day['date'], 0, 10)]))
-                ->values();
+            if ($this->excludeWet) {
+                $skip += array_flip($context->wetDates($this->range()));
+            }
+
+            if ($this->excludeHolidays) {
+                $skip += array_flip($context->publicHolidayDates($this->range()));
+            }
+
+            if ($skip !== []) {
+                $paired = $paired
+                    ->reject(fn (array $day) => isset($skip[substr((string) $day['date'], 0, 10)]))
+                    ->values();
+            }
         }
 
         return [
@@ -338,20 +438,10 @@ new #[Title('Reports')] class extends Component {
     }
 
     /**
-     * Weather-vs-visits comparison. Null when there is no weather data at
-     * all for this range (no sites with coordinates, or the enrichment
-     * job hasn't run yet). A returned shape with `has_enough_data = false`
-     * means "we have some data, but not enough to publish a percentage" —
-     * the card renders an honest empty state in that case.
+     * Weather-vs-visits comparison, or null when there is no weather data
+     * for this range at all.
      *
-     * @return array{
-     *   has_enough_data: bool,
-     *   wet_days_count: int,
-     *   dry_days_count: int,
-     *   wet_avg_visits: int|null,
-     *   dry_avg_visits: int|null,
-     *   delta_percent: float|null,
-     * }|null
+     * @return array{has_enough_data: bool, wet_days_count: int, dry_days_count: int, wet_avg_visits: int|null, dry_avg_visits: int|null, delta_percent: float|null}|null
      */
     #[Computed]
     public function weatherImpact(): ?array
@@ -360,6 +450,8 @@ new #[Title('Reports')] class extends Component {
     }
 
     /**
+     * Tooltip lines for the trend chart, keyed by its labels.
+     *
      * @return array<string, array<int, string>>
      */
     #[Computed]
@@ -368,8 +460,7 @@ new #[Title('Reports')] class extends Component {
         $out = [];
 
         foreach ($this->trend['dates'] as $index => $iso) {
-            $day = strlen($iso) > 10 ? substr($iso, 0, 10) : $iso;
-            $ctx = $this->dayContext->get($day);
+            $ctx = $this->dayContext->get(substr((string) $iso, 0, 10));
 
             if ($ctx === null) {
                 continue;
@@ -402,6 +493,8 @@ new #[Title('Reports')] class extends Component {
     }
 
     /**
+     * Holidays and wet days in the trend, listed on demand under the chart.
+     *
      * @return array<int, array{label: string, kind: string, text: string}>
      */
     #[Computed]
@@ -410,8 +503,7 @@ new #[Title('Reports')] class extends Component {
         $chips = [];
 
         foreach ($this->trend['dates'] as $index => $iso) {
-            $day = strlen($iso) > 10 ? substr($iso, 0, 10) : $iso;
-            $ctx = $this->dayContext->get($day);
+            $ctx = $this->dayContext->get(substr((string) $iso, 0, 10));
 
             if ($ctx === null) {
                 continue;
@@ -420,19 +512,11 @@ new #[Title('Reports')] class extends Component {
             $label = $this->trend['labels'][$index];
 
             if ($ctx['is_public_holiday']) {
-                $chips[] = [
-                    'label' => $label,
-                    'kind' => 'holiday',
-                    'text' => $ctx['holiday_name'] ?? 'Public holiday',
-                ];
+                $chips[] = ['label' => $label, 'kind' => 'holiday', 'text' => $ctx['holiday_name'] ?? 'Public holiday'];
             }
 
-            if ($ctx['weather_label'] !== null && in_array($ctx['weather_label'], ['Rain', 'Thunderstorm', 'Snow'], true)) {
-                $chips[] = [
-                    'label' => $label,
-                    'kind' => 'weather',
-                    'text' => $ctx['weather_label'],
-                ];
+            if ($ctx['weather_label'] !== null && in_array($ctx['weather_label'], DayContextAnalytics::WET_LABELS, true)) {
+                $chips[] = ['label' => $label, 'kind' => 'weather', 'text' => $ctx['weather_label']];
             }
         }
 
@@ -455,6 +539,36 @@ new #[Title('Reports')] class extends Component {
     }
 
     #[Computed]
+    public function hourly(): Collection
+    {
+        return $this->analytics()->visitsByHour($this->range());
+    }
+
+    #[Computed]
+    public function weekday(): Collection
+    {
+        return $this->analytics()->visitsByWeekday($this->range());
+    }
+
+    #[Computed]
+    public function entryPoints(): Collection
+    {
+        return $this->analytics()->topEntryPoints($this->range(), 10);
+    }
+
+    #[Computed]
+    public function frequency(): Collection
+    {
+        return $this->analytics()->visitFrequency($this->range());
+    }
+
+    #[Computed]
+    public function stayDistribution(): Collection
+    {
+        return $this->analytics()->dwellDistribution($this->range());
+    }
+
+    #[Computed]
     public function occupancySummary(): ?array
     {
         return $this->hasOccupancy ? $this->occupancy()->summary($this->range()) : null;
@@ -467,28 +581,17 @@ new #[Title('Reports')] class extends Component {
     }
 
     #[Computed]
+    public function incidentTotal(): int
+    {
+        $s = $this->securitySummary;
+
+        return $s['watchlist_hits'] + $s['long_dwell'] + $s['odd_hour'] + $s['multi_entry'];
+    }
+
+    #[Computed]
     public function quality(): array
     {
         return app(DataQualityAnalytics::class)->summary($this->range());
-    }
-
-    /**
-     * @return array{total: int, daily_average: int, busiest: array<string, mixed>|null, average_dwell: int|null, median_dwell: int|null}
-     */
-    #[Computed]
-    public function summary(): array
-    {
-        $range = $this->range();
-        $dwell = $this->analytics()->dwellSummary($range);
-        $total = $this->analytics()->totalVisits($range);
-
-        return [
-            'total' => $total,
-            'daily_average' => (int) round($total / max(1, $this->daily()->count())),
-            'busiest' => $this->daily()->sortByDesc('count')->first(),
-            'average_dwell' => $dwell['average'],
-            'median_dwell' => $dwell['median'],
-        ];
     }
 
     public function exportCsv(): StreamedResponse
@@ -518,16 +621,18 @@ new #[Title('Reports')] class extends Component {
         return app(Tenancy::class)->isShop();
     }
 
-    protected function normaliseSection(): void
+    protected function normaliseTab(): void
     {
-        if (! array_key_exists($this->section, $this->sections())) {
-            $this->section = 'overview';
+        $this->tab = self::LEGACY_SECTIONS[$this->tab] ?? $this->tab;
+
+        if (! array_key_exists($this->tab, $this->tabs())) {
+            $this->tab = 'summary';
         }
     }
 
     protected function normaliseMetric(): void
     {
-        $allowed = ['visits', 'unique', 'entries', 'exits'];
+        $allowed = ['visits', 'unique', 'exits'];
 
         if ($this->hasOccupancy()) {
             $allowed[] = 'occupancy';
@@ -538,24 +643,35 @@ new #[Title('Reports')] class extends Component {
         }
     }
 
-    /**
-     * @return array{label: string, value: string, icon: string, delta: string|null, tone: string, comparison: string|null}
-     */
-    protected function kpi(string $label, string $value, int|float|null $current, int|float|null $previous, ?string $caption = null, string $icon = 'chart-bar'): array
+    protected function delta(int|float|null $current, int|float|null $previous): ?string
     {
-        $compare = $this->compareKey === 'none'
-            ? ['label' => null, 'tone' => 'muted']
-            : $this->analytics()->comparison($current, $previous);
+        if ($this->comparison === null) {
+            return null;
+        }
+
+        $compare = $this->analytics()->comparison($current, $previous);
+
+        return $compare['label'] === 'No prior data' ? null : $compare['label'];
+    }
+
+    /**
+     * @return array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}
+     */
+    protected function card(string $label, string $value, string $icon, ?string $delta, ?string $caption, ?string $warning = null): array
+    {
+        $comparison = $caption;
+
+        if ($delta !== null && $this->comparisonCaption !== null) {
+            $comparison = $this->comparisonCaption.($caption ? ' · '.$caption : '');
+        }
 
         return [
             'label' => $label,
             'value' => $value,
             'icon' => $icon,
-            'delta' => $compare['label'] === 'No prior data' ? null : $compare['label'],
-            'tone' => $compare['tone'] === 'up' || $compare['tone'] === 'down' ? $compare['tone'] : 'muted',
-            'comparison' => $caption ?? ($this->compareKey === 'none' || $compare['label'] === null
-                ? null
-                : 'vs '.strtolower(DateRange::comparisonOptions()[$this->compareKey] ?? 'previous period')),
+            'delta' => $delta,
+            'comparison' => $comparison,
+            'warning' => $warning,
         ];
     }
 }; ?>
@@ -567,590 +683,529 @@ new #[Title('Reports')] class extends Component {
         :show-bell="false"
     >
         <x-slot:actions>
-            @if (app(Tenancy::class)->hasMultipleSites())
-                <livewire:site-switcher :key="'reports-site'" />
+            @if ($this->canManageSchedule)
+                <flux:button variant="ghost" icon="envelope" :href="route('settings', ['tab' => 'reports'])" wire:navigate class="min-h-11">Scheduled reports</flux:button>
             @endif
-
-            <flux:select wire:model.live="rangeKey" size="sm" class="min-w-40" icon="calendar" label="Period" label:sr-only>
-                @foreach (DateRange::reportOptions() as $key => $label)
-                    <flux:select.option :value="$key">{{ $label }}</flux:select.option>
-                @endforeach
-            </flux:select>
-
-            @if ($rangeKey === 'custom')
-                <flux:input type="date" wire:model.live="fromDate" size="sm" label="From" label:sr-only />
-                <flux:input type="date" wire:model.live="toDate" size="sm" label="To" label:sr-only />
-            @endif
-
-            <flux:select wire:model.live="compareKey" size="sm" class="min-w-44" label="Compare" label:sr-only>
-                @foreach (DateRange::comparisonOptions() as $key => $label)
-                    <flux:select.option :value="$key">{{ $label }}</flux:select.option>
-                @endforeach
-            </flux:select>
-
-            @unless ($this->isShop())
-                <flux:select wire:model.live="audience" size="sm" class="min-w-44" label="Visitors" label:sr-only>
-                    @foreach (DateRange::audienceOptions() as $key => $label)
-                        <flux:select.option :value="$key">{{ $label }}</flux:select.option>
-                    @endforeach
-                </flux:select>
-            @endunless
-
-            <flux:button size="sm" variant="ghost" icon="arrow-down-tray" wire:click="exportCsv">CSV</flux:button>
-            <flux:button size="sm" variant="ghost" icon="document-text" wire:click="exportPdf">PDF</flux:button>
+            <x-export-menu />
         </x-slot:actions>
     </x-dashboard-header>
 
-    <div class="mb-6 inline-flex flex-wrap gap-1 rounded-tf border border-line bg-surface p-1 shadow-tf-sm">
-        @foreach ($this->sections as $key => $label)
-            <button
-                type="button"
-                wire:click="$set('section', '{{ $key }}')"
-                @class([
-                    'rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors',
-                    'bg-accent text-white shadow-tf-sm' => $section === $key,
-                    'text-ink-2 hover:bg-surface-2 hover:text-ink' => $section !== $key,
-                ])
-            >{{ $label }}</button>
-        @endforeach
+    {{-- Shared filters. Every value is mirrored into the URL. --}}
+    <div class="mb-4 flex flex-wrap items-end gap-2" role="group" aria-label="Report filters">
+        @if (app(Tenancy::class)->hasMultipleSites())
+            <livewire:site-switcher :key="'reports-site'" />
+        @endif
+
+        <flux:select wire:model.live="rangeKey" class="min-w-40" icon="calendar" label="Period" label:sr-only>
+            @foreach (DateRange::reportOptions() as $key => $label)
+                <flux:select.option :value="$key">{{ $label }}</flux:select.option>
+            @endforeach
+        </flux:select>
+
+        @if ($rangeKey === 'custom')
+            <flux:input type="date" wire:model.live="fromDate" label="From" label:sr-only class="max-w-44" />
+            <flux:input type="date" wire:model.live="toDate" label="To" label:sr-only class="max-w-44" />
+        @endif
+
+        <flux:select wire:model.live="compareKey" class="min-w-44" label="Compare with" label:sr-only>
+            @foreach (DateRange::comparisonOptions() as $key => $label)
+                <flux:select.option :value="$key">{{ $key === 'none' ? 'No comparison' : 'Compare: '.$label }}</flux:select.option>
+            @endforeach
+        </flux:select>
+
+        @unless ($this->isShop())
+            <flux:select wire:model.live="audience" class="min-w-48" label="Vehicles included" label:sr-only>
+                @foreach (DateRange::audienceOptions() as $key => $label)
+                    <flux:select.option :value="$key">{{ $label }}</flux:select.option>
+                @endforeach
+            </flux:select>
+        @endunless
     </div>
 
-    @if (in_array($section, ['overview', 'visits'], true))
-        {{-- Primary KPI row — the five figures a landlord opens Reports for.
-             Kept intentionally short so Visits and Unique Visitors get room
-             to breathe; everything supporting sits in the compact secondary
-             strip below. --}}
-        <div class="mb-4 grid grid-cols-5 gap-4 max-xl:grid-cols-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-            @foreach ($this->kpis as $card)
+    <x-tabs :tabs="$this->tabs" :current="$tab" model="tab" label="Report sections" class="mb-4" />
+
+    <div role="tabpanel" aria-labelledby="tab-{{ $tab }}" wire:loading.class="opacity-60" wire:target="tab, rangeKey, compareKey, audience, fromDate, toDate">
+
+    {{-- ─────────────── Summary ─────────────── --}}
+    @if ($tab === 'summary')
+        <div class="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+            @foreach ($this->summaryCards as $card)
                 <x-kpi-card
                     :label="$card['label']"
                     :value="$card['value']"
                     :icon="$card['icon']"
                     :delta="$card['delta']"
-                    :delta-tone="$card['tone']"
                     :comparison="$card['comparison']"
+                    :warning="$card['warning']"
                 />
             @endforeach
         </div>
 
-        <div class="mb-6 grid grid-cols-5 gap-3 max-xl:grid-cols-3 max-md:grid-cols-2 max-sm:grid-cols-1">
-            @foreach ($this->secondaryKpis as $secondary)
-                <div class="rounded-tf border border-line bg-surface-2 px-3 py-2.5">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">{{ $secondary['label'] }}</p>
-                    <p class="mt-1 text-[15px] font-semibold text-ink tabular-nums">{{ $secondary['value'] }}</p>
-                    @if ($secondary['detail'])
-                        <p class="text-[11.5px] text-ink-muted">{{ $secondary['detail'] }}</p>
-                    @endif
-                </div>
-            @endforeach
-        </div>
-    @endif
+        @if ($this->dwell['sample'] > 0 && $this->lowStaySample)
+            <x-notice class="mt-4" title="Limited stay data">
+                Only {{ number_format($this->dwell['sample']) }} completed {{ Str::plural('visit', $this->dwell['sample']) }} had a matched exit in this period.
+                Treat stay length with care; it is not compared with other periods until at least {{ (int) config('trafficflow.analytics.min_stay_sample') }} completed visits are available.
+            </x-notice>
+        @endif
 
-    @if ($section === 'overview' || $section === 'visits')
-        <x-panel-card class="mb-6">
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits per day</p>
-                    <p class="mt-1 text-sm text-ink-2">
-                        {{ $this->compareKey === 'none' ? 'Selected period' : 'This period vs '.strtolower(DateRange::comparisonOptions()[$compareKey]) }}
-                        @if ($this->excludeWet && $this->range->grain() === 'day')
-                            <span class="text-ink-muted">· wet days hidden</span>
-                        @endif
-                    </p>
-                </div>
-                <div class="flex items-center gap-2">
-                    {{-- Only meaningful on daily-grain charts. An hourly view is
-                         already inside one day; a weekly bar can't be split by
-                         daily weather. We hide the toggle in those cases so the
-                         UI doesn't offer a control that has no effect. --}}
-                    @if ($this->range->grain() === 'day')
-                        <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
-                            <input
-                                type="checkbox"
-                                wire:model.live="excludeWet"
-                                class="size-3 rounded border-line text-accent focus:ring-accent"
-                            />
-                            <span>Exclude wet days</span>
-                        </label>
+        <x-panel-card
+            class="mt-4"
+            :title="$this->range->grain() === 'hour' ? 'Trend by hour' : ($this->range->grain() === 'week' ? 'Trend by week' : 'Trend by day')"
+            :description="($this->comparison ? 'Selected period against '.strtolower(DateRange::comparisonOptions()[$compareKey]) : 'Selected period')
+                .($this->excludeWet && $this->range->grain() === 'day' ? ' · wet days hidden' : '')
+                .($this->excludeHolidays && $this->range->grain() === 'day' ? ' · holidays hidden' : '')"
+        >
+            <x-slot:actions>
+                <flux:select wire:model.live="chartMetric" class="min-w-40" label="Metric" label:sr-only>
+                    <flux:select.option value="visits">Visits</flux:select.option>
+                    <flux:select.option value="unique">Unique vehicles</flux:select.option>
+                    <flux:select.option value="exits">Exits</flux:select.option>
+                    @if ($this->hasOccupancy)
+                        <flux:select.option value="occupancy">Occupancy</flux:select.option>
                     @endif
-                    <flux:select wire:model.live="chartMetric" size="sm" class="min-w-40" label="Metric" label:sr-only>
-                        <flux:select.option value="visits">Visits</flux:select.option>
-                        <flux:select.option value="unique">Unique visitors</flux:select.option>
-                        <flux:select.option value="entries">Entries</flux:select.option>
-                        <flux:select.option value="exits">Exits</flux:select.option>
-                        @if ($this->hasOccupancy)
-                            <flux:select.option value="occupancy">Occupancy</flux:select.option>
-                        @endif
-                    </flux:select>
-                    <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">
-                        {{ $this->range->grain() === 'hour' ? 'Hourly' : ($this->range->grain() === 'week' ? 'Weekly' : 'Daily') }}
-                    </span>
-                </div>
-            </x-slot:header>
+                </flux:select>
+            </x-slot:actions>
 
-            @if ($this->compareKey !== 'none')
+            @if ($this->comparison)
                 <x-chart
+                    name="reports-trend"
                     :labels="$this->trend['labels']"
                     :series="[
-                        ['label' => 'This period', 'values' => $this->trend['current'], 'color' => 'accent'],
+                        ['label' => 'Selected period', 'values' => $this->trend['current'], 'color' => 'accent'],
                         ['label' => 'Comparison', 'values' => $this->trend['previous'], 'color' => 'accentSoft'],
                     ]"
                     :annotations="$this->dayAnnotations"
                     :show-legend="true"
                     :height="240"
-                    aria-label="Visits over time compared with the selected period"
+                    aria-label="Bar chart of the selected metric over time, compared with the comparison period"
                 />
             @else
                 <x-chart
+                    name="reports-trend"
                     :labels="$this->trend['labels']"
                     :values="$this->trend['current']"
                     :annotations="$this->dayAnnotations"
                     :height="240"
-                    aria-label="Visits over time"
+                    aria-label="Bar chart of the selected metric over time"
                 />
             @endif
 
-            @if (! empty($this->notableDays))
-                <div class="mt-3 flex flex-wrap gap-1.5">
-                    @foreach ($this->notableDays as $chip)
-                        <span @class([
-                            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-                            'bg-warning-soft text-warning' => $chip['kind'] === 'holiday',
-                            'bg-accent-soft text-accent' => $chip['kind'] === 'weather',
-                        ])>
-                            <flux:icon :icon="$chip['kind'] === 'holiday' ? 'calendar-days' : 'cloud'" class="size-3" />
-                            <span class="tabular-nums font-semibold">{{ $chip['label'] }}</span>
-                            <span>·</span>
-                            <span>{{ $chip['text'] }}</span>
-                        </span>
-                    @endforeach
-                </div>
+            @if ($this->range->grain() === 'day')
+                <details class="tf-disclosure mt-3 border-t border-line pt-1" @if ($excludeWet || $excludeHolidays) open @endif>
+                    <summary>Weather and holidays{{ count($this->notableDays) ? ' ('.count($this->notableDays).')' : '' }}</summary>
+                    <div class="pb-2">
+                        @if (! empty($this->notableDays))
+                            <ul class="mb-3 flex flex-wrap gap-1.5">
+                                @foreach ($this->notableDays as $chip)
+                                    <li class="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[12px] text-ink-2">
+                                        <flux:icon :icon="$chip['kind'] === 'holiday' ? 'calendar-days' : 'cloud'" class="size-3.5" aria-hidden="true" />
+                                        <span class="font-semibold tabular-nums text-ink">{{ $chip['label'] }}</span>
+                                        <span>· {{ $chip['text'] }}</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @else
+                            <p class="mb-3 text-[13px] text-ink-2">No public holidays or wet days recorded in this period. Hover a bar to see that day's conditions.</p>
+                        @endif
+
+                        <div class="flex flex-wrap gap-x-5 gap-y-1">
+                            <flux:checkbox wire:model.live="excludeWet" label="Hide wet days" />
+                            <flux:checkbox wire:model.live="excludeHolidays" label="Hide public holidays" />
+                        </div>
+                        <p class="mt-1.5 text-[12px] text-ink-2">
+                            Only changes this chart. The headline figures, other tabs and exports still count every day.
+                            Wet means {{ Str::lower(implode(', ', DayContextAnalytics::WET_LABELS)) }}.
+                        </p>
+                    </div>
+                </details>
             @endif
         </x-panel-card>
 
-        {{-- ── Weather impact card ────────────────────────────────────────
-             The chip strip above says *which* days were wet; this card says
-             by how much they hurt. Only rendered when the tenant has any
-             weather data at all — an owner who has never set coordinates
-             sees no card, not an empty one. --}}
-        @if ($this->weatherImpact !== null)
-            @php
-                $wx = $this->weatherImpact;
-                $delta = $wx['delta_percent'];
-                $deltaTone = match (true) {
-                    $delta === null => 'text-ink-2',
-                    $delta <= -5.0 => 'text-danger',
-                    $delta >= 5.0 => 'text-success',
-                    default => 'text-ink-2',
-                };
-            @endphp
-            <x-panel-card class="mb-6">
-                <x-slot:header>
-                    <div class="flex items-center gap-3">
-                        <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                            <flux:icon icon="cloud" class="size-4" />
-                        </span>
-                        <div>
-                            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Weather impact</p>
-                            <p class="mt-1 text-sm text-ink-2">
-                                Wet days ({{ implode(', ', \App\Support\Analytics\DayContextAnalytics::WET_LABELS) }}) vs dry days over this period
-                            </p>
-                        </div>
-                    </div>
-                </x-slot:header>
+        <x-panel-card class="mt-4" title="Highlights" :description="$this->isShop() || $audience === 'shopper'
+            ? 'Shopper traffic only · '.number_format($this->highlights['excluded']).' visits by vehicles recognised as staff or regulars are left out'
+            : ($audience === 'staff' ? 'Staff and regular vehicles only' : 'All vehicles, including staff and regulars')">
+            <dl class="grid grid-cols-3 gap-4 max-md:grid-cols-1">
+                <div>
+                    <dt class="text-[13px] text-ink-2">Busiest day</dt>
+                    <dd class="mt-0.5 text-[16px] font-semibold text-ink">
+                        @if ($this->highlights['busiest'])
+                            {{ $this->highlights['busiest']['label'] }}
+                            <span class="text-[13px] font-normal text-ink-2">· {{ number_format($this->highlights['busiest']['count']) }} {{ Str::plural('visit', $this->highlights['busiest']['count']) }}</span>
+                        @else
+                            <span class="text-ink-2">No visits yet</span>
+                        @endif
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-[13px] text-ink-2">Peak hour</dt>
+                    <dd class="mt-0.5 text-[16px] font-semibold text-ink">
+                        @if ($this->highlights['peak'])
+                            {{ $this->highlights['peak']['label'] }}–{{ sprintf('%02d:00', ($this->highlights['peak']['hour'] + 1) % 24) }}
+                            <span class="text-[13px] font-normal text-ink-2">· {{ number_format($this->highlights['peak']['count']) }} {{ Str::plural('arrival', $this->highlights['peak']['count']) }} across the period</span>
+                        @else
+                            <span class="text-ink-2">No arrivals yet</span>
+                        @endif
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-[13px] text-ink-2">Daily average</dt>
+                    <dd class="mt-0.5 text-[16px] font-semibold text-ink">
+                        {{ number_format($this->highlights['daily_average']) }}
+                        <span class="text-[13px] font-normal text-ink-2">visits per day · {{ $this->daily->count() }} {{ Str::plural('day', $this->daily->count()) }}</span>
+                    </dd>
+                </div>
+            </dl>
+        </x-panel-card>
 
-                @if ($wx['has_enough_data'])
-                    <div class="grid gap-4 sm:grid-cols-3">
-                        <div>
-                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Wet days</p>
-                            <p class="mt-1 text-[22px] font-semibold text-ink tabular-nums">
-                                {{ number_format($wx['wet_avg_visits']) }}
-                            </p>
-                            <p class="text-[11.5px] text-ink-muted">
-                                avg / day · {{ $wx['wet_days_count'] }} {{ Str::plural('day', $wx['wet_days_count']) }}
-                            </p>
-                        </div>
-                        <div>
-                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Dry days</p>
-                            <p class="mt-1 text-[22px] font-semibold text-ink tabular-nums">
-                                {{ number_format($wx['dry_avg_visits']) }}
-                            </p>
-                            <p class="text-[11.5px] text-ink-muted">
-                                avg / day · {{ $wx['dry_days_count'] }} {{ Str::plural('day', $wx['dry_days_count']) }}
-                            </p>
-                        </div>
-                        <div>
-                            <p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Weekday-adjusted effect</p>
-                            <p class="mt-1 text-[22px] font-semibold tabular-nums {{ $deltaTone }}">
-                                @if ($delta === null)
-                                    —
-                                @else
-                                    {{ $delta > 0 ? '+' : '' }}{{ number_format($delta, 1) }}%
-                                @endif
-                            </p>
-                            <p class="text-[11.5px] text-ink-muted">
-                                @if ($delta === null)
-                                    Not enough dry-day baseline
-                                @elseif ($delta < 0)
-                                    Wet days averaged {{ number_format(abs($delta), 1) }}% fewer visits than the same weekday in dry weather
-                                @elseif ($delta > 0)
-                                    Wet days averaged {{ number_format($delta, 1) }}% more visits — likely noise, widen the range
-                                @else
-                                    No measurable difference this period
-                                @endif
-                            </p>
-                        </div>
-                    </div>
+        <details class="tf-disclosure mt-4 rounded-tf border border-line bg-surface px-4 sm:px-5">
+            <summary>Daily breakdown</summary>
+            <div class="pb-4">
+                @if ($this->daily->isEmpty())
+                    <x-empty-state title="No days in this period" />
                 @else
-                    <p class="text-[13px] text-ink-2">
-                        Not enough data for a reliable comparison yet
-                        ({{ $wx['wet_days_count'] }} {{ Str::plural('wet day', $wx['wet_days_count']) }},
-                        {{ $wx['dry_days_count'] }} {{ Str::plural('dry day', $wx['dry_days_count']) }} in range).
-                        Try a longer window — 30 or 90 days usually surfaces enough weather variation to compare.
-                    </p>
+                    <x-data-table :headers="['Day', ['label' => 'Visits', 'align' => 'right']]">
+                        @foreach ($this->dailyRows as $day)
+                            <tr wire:key="day-{{ $day['date'] }}">
+                                <td class="border-b border-line py-2">{{ Date::parse($day['date'])->format('D j M Y') }}</td>
+                                <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($day['count']) }}</td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+
+                    @php
+                        $page = min(max(1, $dailyPage), $this->dailyPageCount);
+                        $first = ($page - 1) * $this::DAILY_PAGE_SIZE + 1;
+                        $last = min($this->daily->count(), $page * $this::DAILY_PAGE_SIZE);
+                    @endphp
+                    <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-[13px] text-ink-2">
+                        <span>Days {{ $first }}–{{ $last }} of {{ $this->daily->count() }}, newest first. Exports include every day.</span>
+                        @if ($this->dailyPageCount > 1)
+                            <span class="flex gap-2">
+                                <flux:button wire:click="previousDailyPage" :disabled="$page <= 1" class="min-h-11" icon="chevron-left">Newer</flux:button>
+                                <flux:button wire:click="nextDailyPage" :disabled="$page >= $this->dailyPageCount" class="min-h-11" icon:trailing="chevron-right">Older</flux:button>
+                            </span>
+                        @endif
+                    </div>
                 @endif
-            </x-panel-card>
-        @endif
+            </div>
+        </details>
     @endif
 
-    @if ($section === 'overview' && $this->canSeeOps)
-        <x-panel-card class="mb-6">
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                        <flux:icon icon="signal" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visit pairing quality</p>
-                        <p class="mt-1 text-sm text-ink-2">How cleanly entry and exit reads became visits</p>
-                    </div>
-                </div>
-            </x-slot:header>
-            <p class="text-[30px] font-semibold leading-none tracking-tight text-ink">
-                {{ $this->quality['pairing_quality'] === null ? '—' : $this->quality['pairing_quality'].'%' }}
-            </p>
-            <p class="mt-2 text-[13px] text-ink-2">
-                {{ number_format($this->quality['pairable_reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
-                · {{ number_format($this->quality['unmatched_reads']) }} unmatched reads
-            </p>
-        </x-panel-card>
-    @endif
-
-    @if ($section === 'overview')
-        <div class="mb-6 grid grid-cols-2 gap-4 max-md:grid-cols-1">
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Total visits by hour</p>
-                        <p class="mt-1 text-sm text-ink-2">Every hour, added up across the whole period</p>
-                    </div>
-                </x-slot:header>
+    {{-- ─────────────── Traffic patterns ─────────────── --}}
+    @if ($tab === 'traffic')
+        <div class="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
+            <x-panel-card title="Arrivals by hour of day" description="Total arrivals in each hour, added up across the period">
                 <x-chart
-                    :labels="$this->analytics->visitsByHour($this->range)->pluck('label')->all()"
-                    :values="$this->analytics->visitsByHour($this->range)->pluck('count')->all()"
-                    :height="200"
-                    aria-label="Bar chart of vehicle visits by hour"
+                    name="reports-hourly"
+                    :labels="$this->hourly->pluck('label')->all()"
+                    :values="$this->hourly->pluck('count')->all()"
+                    :height="220"
+                    aria-label="Bar chart of arrivals by hour of day"
                 />
             </x-panel-card>
 
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Dwell time distribution</p>
-                        <p class="mt-1 text-sm text-ink-2">Closed visits only</p>
-                    </div>
-                </x-slot:header>
-                <x-data-table :headers="['Duration', ['label' => 'Visits', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
-                    @foreach ($this->analytics->dwellDistribution($this->range) as $bucket)
-                        <tr wire:key="bucket-{{ $bucket['label'] }}">
-                            <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($bucket['count']) }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ $bucket['percent'] }}%</td>
-                        </tr>
-                    @endforeach
-                </x-data-table>
+            <x-panel-card title="Arrivals by weekday" description="Average arrivals per occurrence of each weekday">
+                <x-chart
+                    name="reports-weekday"
+                    :labels="$this->weekday->pluck('label')->all()"
+                    :values="$this->weekday->pluck('count')->all()"
+                    :height="220"
+                    aria-label="Bar chart of average arrivals by weekday"
+                />
             </x-panel-card>
         </div>
 
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Daily breakdown</p>
-                    <p class="mt-1 text-sm text-ink-2">Every day in the selected window</p>
-                </div>
-            </x-slot:header>
-            <x-data-table
-                :headers="['Day', ['label' => 'Visits', 'align' => 'right']]"
-                :is-empty="$this->daily->isEmpty()"
-            >
-                @foreach ($this->daily->reverse() as $day)
-                    <tr wire:key="day-{{ $day['date'] }}">
-                        <td class="border-b border-line py-2">{{ $day['label'] }}</td>
-                        <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($day['count']) }}</td>
-                    </tr>
-                @endforeach
-            </x-data-table>
-        </x-panel-card>
-    @endif
-
-    @if ($section === 'visits')
-        <x-panel-card class="mb-6">
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Day and hour</p>
-                    <p class="mt-1 text-sm text-ink-2">Average visits for each weekday and hour</p>
-                </div>
-                <div class="flex items-center gap-2 text-[11px] text-ink-muted">
-                    <span class="size-2.5 rounded-sm bg-accent/20"></span>
-                    Quiet
-                    <span class="size-2.5 rounded-sm bg-accent"></span>
-                    Busy
-                </div>
-            </x-slot:header>
+        <x-panel-card class="mt-4" title="Busy times" description="Average arrivals for each weekday and hour. Hover a cell for its value.">
+            <x-slot:actions>
+                <span class="flex items-center gap-2 text-[12px] text-ink-2" aria-hidden="true">
+                    <span class="size-3 rounded-sm bg-accent/20"></span> Quiet
+                    <span class="size-3 rounded-sm bg-accent"></span> Busy
+                </span>
+            </x-slot:actions>
             <x-heatmap :rows="$this->heatmap" :max="$this->heatmapMax" />
         </x-panel-card>
 
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits by day of week</p>
-                    <p class="mt-1 text-sm text-ink-2">Average visits per occurrence of that weekday</p>
-                </div>
-            </x-slot:header>
-            <x-chart
-                :labels="$this->analytics->visitsByWeekday($this->range)->pluck('label')->all()"
-                :values="$this->analytics->visitsByWeekday($this->range)->pluck('count')->all()"
-                :height="220"
-                aria-label="Average visits by weekday"
-            />
-        </x-panel-card>
-    @endif
-
-    @if ($section === 'dwell')
-        <div class="mb-6 grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-            <x-kpi-card
-                label="Avg dwell"
-                :value="$this->summary['average_dwell'] === null ? '—' : $this->summary['average_dwell'].' min'"
-                icon="clock"
-            />
-            <x-kpi-card
-                label="Median dwell"
-                :value="$this->summary['median_dwell'] === null ? '—' : $this->summary['median_dwell'].' min'"
-                icon="clock"
-            />
-        </div>
-
-        <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Dwell distribution</p>
-                        <p class="mt-1 text-sm text-ink-2">How long visitors stayed</p>
-                    </div>
-                </x-slot:header>
-                <x-chart
-                    :labels="$this->analytics->dwellDistribution($this->range)->pluck('label')->all()"
-                    :values="$this->analytics->dwellDistribution($this->range)->pluck('count')->all()"
-                    :height="220"
-                    aria-label="Visit counts by dwell bucket"
-                />
-            </x-panel-card>
-
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Share of visits</p>
-                        <p class="mt-1 text-sm text-ink-2">Closed visits only</p>
-                    </div>
-                </x-slot:header>
-                <x-data-table :headers="['Duration', ['label' => 'Visits', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
-                    @foreach ($this->analytics->dwellDistribution($this->range) as $bucket)
-                        <tr wire:key="dwell-{{ $bucket['label'] }}">
-                            <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($bucket['count']) }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ $bucket['percent'] }}%</td>
+        <x-panel-card class="mt-4" title="Entry points" description="Arrivals by entrance camera in this period">
+            @if ($this->entryPoints->isEmpty())
+                <x-empty-state title="No entrance-camera arrivals in this period" icon="map-pin" />
+            @else
+                @php $entryTotal = $this->entryPoints->sum('count') ?: 1; @endphp
+                <x-data-table :headers="['Entry point', ['label' => 'Arrivals', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
+                    @foreach ($this->entryPoints as $entry)
+                        <tr wire:key="entry-{{ $entry['label'] }}">
+                            <td class="border-b border-line py-2">{{ $entry['label'] }}</td>
+                            <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($entry['count']) }}</td>
+                            <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ number_format($entry['count'] / $entryTotal * 100, 1) }}%</td>
                         </tr>
                     @endforeach
                 </x-data-table>
+            @endif
+        </x-panel-card>
+
+        @if ($this->occupancySummary)
+            <x-panel-card class="mt-4" title="Occupancy" :description="'Vehicles on site reconstructed from entries and exits, against '.number_format($this->occupancySummary['capacity']).' parking spaces'">
+                <dl class="mb-4 grid grid-cols-4 gap-4 max-lg:grid-cols-2">
+                    <div><dt class="text-[13px] text-ink-2">Average occupancy</dt><dd class="text-[18px] font-semibold tabular-nums">{{ number_format($this->occupancySummary['average'], 1) }}</dd></div>
+                    <div><dt class="text-[13px] text-ink-2">Peak occupancy</dt><dd class="text-[18px] font-semibold tabular-nums">{{ number_format($this->occupancySummary['peak']) }}</dd></div>
+                    <div><dt class="text-[13px] text-ink-2">Peak time</dt><dd class="text-[18px] font-semibold tabular-nums">{{ $this->occupancySummary['peak_at'] ? Date::parse($this->occupancySummary['peak_at'])->format('j M H:i') : '—' }}</dd></div>
+                    <div><dt class="text-[13px] text-ink-2">Parking pressure</dt><dd class="text-[18px] font-semibold tabular-nums">{{ $this->occupancySummary['parking_pressure'] }}</dd><dd class="text-[12px] text-ink-2">above 80% · above 90%: {{ OccupancyAnalytics::formatDuration($this->occupancySummary['minutes_above_90']) }}</dd></div>
+                </dl>
+                <x-chart
+                    name="reports-occupancy"
+                    :labels="$this->occupancy->series($this->range)->pluck('label')->all()"
+                    :values="$this->occupancy->series($this->range)->pluck('count')->all()"
+                    :height="220"
+                    aria-label="Bar chart of occupancy over time"
+                />
+            </x-panel-card>
+        @endif
+
+        <details class="tf-disclosure mt-4 rounded-tf border border-line bg-surface px-4 sm:px-5">
+            <summary>Weather impact</summary>
+            <div class="pb-4">
+                @php $wx = $this->weatherImpact; @endphp
+                @if ($wx === null)
+                    <x-empty-state title="No weather data for this period">
+                        Weather is recorded daily for sites with a location set. Add coordinates to the site to start collecting it.
+                    </x-empty-state>
+                @elseif (! $wx['has_enough_data'])
+                    <p class="text-[13px] text-ink-2">
+                        Not enough data for a reliable comparison yet
+                        ({{ $wx['wet_days_count'] }} {{ Str::plural('wet day', $wx['wet_days_count']) }},
+                        {{ $wx['dry_days_count'] }} {{ Str::plural('dry day', $wx['dry_days_count']) }}).
+                        Try a longer period — 30 days or more usually has enough weather variation.
+                    </p>
+                @else
+                    <dl class="grid grid-cols-3 gap-4 max-md:grid-cols-1">
+                        <div>
+                            <dt class="text-[13px] text-ink-2">Wet days</dt>
+                            <dd class="text-[20px] font-semibold tabular-nums">{{ number_format($wx['wet_avg_visits']) }} <span class="text-[13px] font-normal text-ink-2">visits/day · {{ $wx['wet_days_count'] }} {{ Str::plural('day', $wx['wet_days_count']) }}</span></dd>
+                        </div>
+                        <div>
+                            <dt class="text-[13px] text-ink-2">Dry days</dt>
+                            <dd class="text-[20px] font-semibold tabular-nums">{{ number_format($wx['dry_avg_visits']) }} <span class="text-[13px] font-normal text-ink-2">visits/day · {{ $wx['dry_days_count'] }} {{ Str::plural('day', $wx['dry_days_count']) }}</span></dd>
+                        </div>
+                        <div>
+                            <dt class="text-[13px] text-ink-2">Weekday-adjusted difference</dt>
+                            <dd class="text-[20px] font-semibold tabular-nums">
+                                {{ $wx['delta_percent'] === null ? '—' : ($wx['delta_percent'] > 0 ? '+' : '').number_format($wx['delta_percent'], 1).'%' }}
+                            </dd>
+                        </div>
+                    </dl>
+                    <p class="mt-2 text-[12px] text-ink-2">
+                        Wet days compared with dry days on the same weekday. An association only — it does not show that weather caused the difference.
+                    </p>
+                @endif
+            </div>
+        </details>
+    @endif
+
+    {{-- ─────────────── Visit behaviour ─────────────── --}}
+    @if ($tab === 'behaviour')
+        @php $return30 = $this->analytics->returnRate30Day($this->range); @endphp
+        <div class="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+            <x-kpi-card label="First-time vehicles" :value="number_format($this->analytics->firstTimeVehicles($this->range))" icon="sparkles"
+                comparison="Not seen before this period" />
+            <x-kpi-card label="Returning vehicles" :value="$this->returning === null ? '—' : number_format($this->returning)" icon="arrow-path"
+                :comparison="$this->returning === null ? 'Not enough history before this period yet' : 'Seen at least once before this period'" />
+            <x-kpi-card label="Returning share" :value="$this->returnRate === null ? '—' : $this->returnRate.'%'" icon="chart-pie"
+                :comparison="$this->returnRate === null
+                    ? 'Not enough history yet'
+                    : number_format($this->returning ?? 0).' of '.number_format($this->unique).' unique vehicles'.($return30 === null ? '' : ' · 30-day: '.$return30.'%')" />
+            <x-kpi-card label="Typical stay" :value="$this->dwell['median'] === null ? '—' : $this->dwell['median'].' min'" icon="clock"
+                :comparison="$this->dwell['sample'] === 0 ? 'No completed visits in this period' : 'Median of '.number_format($this->dwell['sample']).' completed '.Str::plural('visit', $this->dwell['sample'])"
+                :warning="$this->dwell['sample'] > 0 && $this->lowStaySample ? 'Low sample — interpret with care.' : null" />
+        </div>
+
+        <x-notice tone="info" class="mt-4" title="How returning is defined">
+            A returning vehicle is a registration seen in this period that was also recorded at any time before the period started, within the data retained for this site.
+            The 30-day figure only looks back 30 days. Vehicles are identified by number plate, so a returning vehicle is not necessarily the same person.
+        </x-notice>
+
+        <div class="mt-4 grid grid-cols-2 gap-4 max-lg:grid-cols-1">
+            <x-panel-card title="Repeat visit frequency" description="Unique vehicles by how many times they visited in this period">
+                <x-chart-table label="Repeat frequency view">
+                    <x-slot:chart>
+                        <x-chart
+                            name="reports-frequency"
+                            :labels="$this->frequency->pluck('label')->all()"
+                            :values="$this->frequency->pluck('count')->all()"
+                            :height="220"
+                            aria-label="Bar chart of unique vehicles by number of visits"
+                        />
+                    </x-slot:chart>
+                    <x-slot:table>
+                        <x-data-table :headers="['Visits in period', ['label' => 'Vehicles', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
+                            @foreach ($this->frequency as $bucket)
+                                <tr wire:key="freq-{{ $bucket['label'] }}">
+                                    <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>
+                                    <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($bucket['count']) }}</td>
+                                    <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ $bucket['percent'] }}%</td>
+                                </tr>
+                            @endforeach
+                        </x-data-table>
+                    </x-slot:table>
+                </x-chart-table>
+            </x-panel-card>
+
+            <x-panel-card title="Length of stay" :description="$this->dwell['sample'] === 0
+                ? 'Completed visits with a matched exit'
+                : 'Based on '.number_format($this->dwell['sample']).' completed '.Str::plural('visit', $this->dwell['sample']).' with a matched exit'">
+                @if ($this->dwell['sample'] === 0)
+                    <x-empty-state title="No completed visits in this period" icon="clock">
+                        Stay length needs an entry and a matched exit for the same vehicle. See System health for how many exits were matched.
+                    </x-empty-state>
+                @else
+                    <x-chart-table label="Length of stay view">
+                        <x-slot:chart>
+                            <x-chart
+                                name="reports-stay"
+                                :labels="$this->stayDistribution->pluck('label')->all()"
+                                :values="$this->stayDistribution->pluck('count')->all()"
+                                :height="220"
+                                aria-label="Bar chart of completed visits by length of stay"
+                            />
+                        </x-slot:chart>
+                        <x-slot:table>
+                            <x-data-table :headers="['Length of stay', ['label' => 'Completed visits', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
+                                @foreach ($this->stayDistribution as $bucket)
+                                    <tr wire:key="stay-{{ $bucket['label'] }}">
+                                        <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>
+                                        <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($bucket['count']) }}</td>
+                                        <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ $bucket['percent'] }}%</td>
+                                    </tr>
+                                @endforeach
+                            </x-data-table>
+                        </x-slot:table>
+                    </x-chart-table>
+                    @if ($this->lowStaySample)
+                        <p class="mt-2 text-[12px] text-ink-2">Low sample: a handful of visits can swing these shares a lot.</p>
+                    @endif
+                @endif
             </x-panel-card>
         </div>
     @endif
 
-    @if ($section === 'behaviour')
+    {{-- ─────────────── Security ─────────────── --}}
+    @if ($tab === 'security' && $this->canSeeOps)
+        <div class="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+            <x-kpi-card label="Watchlist matches" :value="number_format($this->securitySummary['watchlist_hits'])" icon="bell-alert" comparison="Watchlisted plates detected" />
+            <x-kpi-card label="Long-stay alerts" :value="number_format($this->securitySummary['long_dwell'])" icon="clock" comparison="Over the site's stay threshold" />
+            <x-kpi-card label="Unusual-hour alerts" :value="number_format($this->securitySummary['odd_hour'])" icon="moon" comparison="Repeated arrivals at night" />
+            <x-kpi-card label="Repeated-entry alerts" :value="number_format($this->securitySummary['multi_entry'])" icon="arrows-right-left" comparison="Same plate entering several times a day" />
+        </div>
+
+        <x-panel-card class="mt-4" title="Incident history" description="Alerts raised by the configured security rules in this period">
+            <x-slot:actions>
+                <a href="{{ route('security') }}" wire:navigate class="inline-flex min-h-11 items-center text-[13px] font-medium text-accent hover:underline">Live alerts</a>
+            </x-slot:actions>
+
+            @if ($this->incidentTotal === 0)
+                <x-empty-state title="No incidents recorded for this period" icon="shield-check">
+                    Alerts appear here when a configured rule is triggered. Rules and thresholds are set per site in Settings.
+                </x-empty-state>
+            @else
+                @php $security = app(SecurityAnalytics::class); @endphp
+                <div class="grid grid-cols-[2fr_1fr] gap-6 max-lg:grid-cols-1">
+                    <x-chart
+                        name="reports-incidents"
+                        :labels="$security->incidentsByDay($this->range)->pluck('label')->all()"
+                        :values="$security->incidentsByDay($this->range)->pluck('count')->all()"
+                        :height="220"
+                        aria-label="Bar chart of security incidents by day"
+                    />
+                    <x-data-table :headers="['Rule', ['label' => 'Alerts', 'align' => 'right']]">
+                        @foreach ($security->incidentsByType($this->range) as $row)
+                            <tr wire:key="incident-{{ $row['label'] }}">
+                                <td class="border-b border-line py-2">{{ $row['label'] }}</td>
+                                <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($row['count']) }}</td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                </div>
+            @endif
+        </x-panel-card>
+
+        <p class="mt-3 text-[13px] text-ink-2">
+            Entries without a matching exit are a camera-coverage question rather than a security incident —
+            <button type="button" wire:click="$set('tab', 'health')" class="inline-flex min-h-11 items-center font-medium text-accent hover:underline">see System health</button>.
+        </p>
+    @endif
+
+    {{-- ─────────────── System health ─────────────── --}}
+    @if ($tab === 'health' && $this->canSeeOps)
         @php
-            // Cache these because returningVehicles and returningVehicleRate
-            // both hit the DB, and the null-vs-value branching below asks
-            // for each result twice.
-            $behaviourAnalytics = $this->analytics;
-            $behaviourRange = $this->range;
-            $behaviourReturning = $behaviourAnalytics->returningVehicles($behaviourRange);
-            $behaviourReturnRate = $behaviourAnalytics->returningVehicleRate($behaviourRange);
-            $behaviourReturn30 = $behaviourAnalytics->returnRate30Day($behaviourRange);
+            $q = $this->quality;
+            $excluded = $q['reads'] - $q['pairable_reads'];
         @endphp
 
-        <div class="mb-6 grid grid-cols-3 gap-4 max-sm:grid-cols-1">
-            <x-kpi-card label="First-time visitors" :value="number_format($behaviourAnalytics->firstTimeVehicles($behaviourRange))" icon="user-group" />
-            <x-kpi-card
-                label="Returning visitors"
-                :value="$behaviourReturning === null ? '—' : number_format($behaviourReturning)"
-                icon="arrow-path"
-                :comparison="$behaviourReturning === null ? 'Not enough history yet' : null"
-            />
-            <x-kpi-card
-                label="Return rate"
-                :value="$behaviourReturnRate === null ? '—' : $behaviourReturnRate.'%'"
-                icon="arrow-path"
-                :comparison="$behaviourReturnRate === null
-                    ? 'Not enough history yet'
-                    : ($behaviourReturn30 === null ? null : '30-day return rate: '.$behaviourReturn30.'%')"
-            />
+        @if ($q['pairing_quality'] !== null && $q['orphan_entries'] > $q['paired_visits'])
+            <x-notice class="mb-4" title="Entry and exit matching needs attention">
+                Most entries in this period never matched an exit ({{ number_format($q['eligible_exits']) }} eligible exit {{ Str::plural('read', $q['eligible_exits']) }} against {{ number_format($q['eligible_entries']) }} entry reads).
+                This usually means an exit camera is missing, mis-aimed or set to the wrong direction. Stay length and the live on-site count are less reliable until it is fixed.
+            </x-notice>
+        @endif
+
+        <div class="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+            <x-kpi-card label="Plate reads received" :value="number_format($q['reads'])" icon="inbox-arrow-down" comparison="Every read the cameras sent, before any filtering" />
+            <x-kpi-card label="Eligible for matching" :value="number_format($q['pairable_reads'])" icon="funnel"
+                :comparison="number_format($excluded).' excluded as duplicates, unreadable or without a direction'" />
+            <x-kpi-card label="Matched visits" :value="number_format($q['paired_visits'])" icon="link"
+                :comparison="$q['pairing_quality'] === null ? 'No eligible reads yet' : number_format($q['paired_visits'] * 2).' of '.number_format($q['pairable_reads']).' eligible reads paired ('.$q['pairing_quality'].'%)'" />
+            <x-kpi-card label="Cameras reachable now" :value="$q['cameras_total'] === 0 ? '—' : number_format($q['cameras_total'] - $q['cameras_offline']).' of '.number_format($q['cameras_total'])" icon="video-camera"
+                comparison="Live check. Uptime history over the period is not recorded." />
         </div>
 
-        <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visit frequency</p>
-                        <p class="mt-1 text-sm text-ink-2">How often the same vehicle came back</p>
-                    </div>
-                </x-slot:header>
-                <x-chart
-                    :labels="$this->analytics->visitFrequency($this->range)->pluck('label')->all()"
-                    :values="$this->analytics->visitFrequency($this->range)->pluck('count')->all()"
-                    :height="220"
-                    aria-label="Unique visitors by visit frequency"
-                />
-            </x-panel-card>
-
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Frequency breakdown</p>
-                        <p class="mt-1 text-sm text-ink-2">Unique visitors, not plates</p>
-                    </div>
-                </x-slot:header>
-                <x-data-table :headers="['Visits', ['label' => 'Visitors', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
-                    @foreach ($this->analytics->visitFrequency($this->range) as $bucket)
-                        <tr wire:key="freq-{{ $bucket['label'] }}">
-                            <td class="border-b border-line py-2">{{ $bucket['label'] }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($bucket['count']) }}</td>
-                            <td class="border-b border-line py-2 text-right tabular-nums text-ink-2">{{ $bucket['percent'] }}%</td>
+        <div class="mt-4 grid grid-cols-2 gap-4 max-lg:grid-cols-1">
+            <x-panel-card title="Matching diagnostics" description="How entry and exit reads became visits in this period">
+                <x-data-table :headers="['Measure', ['label' => 'Count', 'align' => 'right']]">
+                    @foreach ([
+                        ['Entry reads received', $q['entries']],
+                        ['Exit reads received', $q['exits']],
+                        ['Eligible entry reads', $q['eligible_entries']],
+                        ['Eligible exit reads', $q['eligible_exits']],
+                        ['Matched visits (entry + exit)', $q['paired_visits']],
+                        ['Entries without matching exits', $q['orphan_entries']],
+                        ['Entries still waiting for an exit', $q['open_visits']],
+                        ['Exits without matching entries', $q['orphan_exits']],
+                        ['Cameras offline now', $q['cameras_offline']],
+                    ] as [$label, $count])
+                        <tr>
+                            <td class="border-b border-line py-2">{{ $label }}</td>
+                            <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($count) }}</td>
                         </tr>
                     @endforeach
                 </x-data-table>
             </x-panel-card>
-        </div>
-    @endif
 
-    @if ($section === 'occupancy' && $this->occupancySummary)
-        <div class="mb-6 grid grid-cols-4 gap-4 max-lg:grid-cols-2 max-sm:grid-cols-1">
-            <x-kpi-card label="Average occupancy" :value="number_format($this->occupancySummary['average'], 1)" icon="map-pin" />
-            <x-kpi-card label="Peak occupancy" :value="number_format($this->occupancySummary['peak'])" icon="chart-bar" />
-            <x-kpi-card
-                label="Time peak occurred"
-                :value="$this->occupancySummary['peak_at'] ? \Illuminate\Support\Facades\Date::parse($this->occupancySummary['peak_at'])->format('j M H:i') : '—'"
-                icon="clock"
-            />
-            <x-kpi-card
-                label="Parking pressure"
-                :value="$this->occupancySummary['parking_pressure'].' above 80%'"
-                icon="bell-alert"
-                :comparison="'Above 90%: '.\App\Support\Analytics\OccupancyAnalytics::formatDuration($this->occupancySummary['minutes_above_90'])"
-            />
-        </div>
-
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Occupancy over time</p>
-                    <p class="mt-1 text-sm text-ink-2">Vehicles on site from entry and exit state</p>
-                </div>
-            </x-slot:header>
-            <x-chart
-                :labels="$this->occupancy->series($this->range)->pluck('label')->all()"
-                :values="$this->occupancy->series($this->range)->pluck('count')->all()"
-                :height="240"
-                aria-label="Occupancy over time"
-            />
-        </x-panel-card>
-    @endif
-
-    @if ($section === 'security' && $this->canSeeOps)
-        <div class="mb-6 grid grid-cols-3 gap-4 max-lg:grid-cols-2 max-sm:grid-cols-1">
-            <x-kpi-card label="Watchlist hits" :value="number_format($this->securitySummary['watchlist_hits'])" icon="shield-exclamation" />
-            <x-kpi-card label="Long-dwell alerts" :value="number_format($this->securitySummary['long_dwell'])" icon="clock" />
-            <x-kpi-card label="Odd-hour activity" :value="number_format($this->securitySummary['odd_hour'])" icon="clock" />
-            <x-kpi-card label="Multiple-entry vehicles" :value="number_format($this->securitySummary['multi_entry'])" icon="arrow-path" />
-            <x-kpi-card label="Missed exits / orphan visits" :value="number_format($this->securitySummary['orphaned'])" icon="information-circle" />
-            <x-kpi-card label="Cameras currently offline" :value="number_format($this->securitySummary['cameras_offline'])" icon="video-camera" />
-        </div>
-
-        <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Incidents by day</p>
-                        <p class="mt-1 text-sm text-ink-2">Alert volume across the period</p>
-                    </div>
-                </x-slot:header>
-                <x-chart
-                    :labels="app(\App\Support\Analytics\SecurityAnalytics::class)->incidentsByDay($this->range)->pluck('label')->all()"
-                    :values="app(\App\Support\Analytics\SecurityAnalytics::class)->incidentsByDay($this->range)->pluck('count')->all()"
-                    color="danger"
-                    :height="220"
-                    aria-label="Security incidents by day"
-                />
-            </x-panel-card>
-
-            <x-panel-card>
-                <x-slot:header>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Incidents by type</p>
-                        <p class="mt-1 text-sm text-ink-2">Watchlist, dwell, odd-hour, multi-entry</p>
-                    </div>
-                </x-slot:header>
-                <x-chart
-                    :labels="app(\App\Support\Analytics\SecurityAnalytics::class)->incidentsByType($this->range)->pluck('label')->all()"
-                    :values="app(\App\Support\Analytics\SecurityAnalytics::class)->incidentsByType($this->range)->pluck('count')->all()"
-                    color="warning"
-                    :height="220"
-                    aria-label="Security incidents by type"
-                />
+            <x-panel-card title="Excluded reads" :description="number_format($excluded).' of '.number_format($q['reads']).' received reads were not used for matching'">
+                <x-data-table :headers="['Reason', ['label' => 'Reads', 'align' => 'right']]">
+                    <tr>
+                        <td class="border-b border-line py-2">Duplicate photo of a vehicle already counted</td>
+                        <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($q['excluded_duplicates']) }}</td>
+                    </tr>
+                    <tr>
+                        <td class="border-b border-line py-2">Plate could not be read</td>
+                        <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($q['excluded_unreadable']) }}</td>
+                    </tr>
+                    <tr>
+                        <td class="border-b border-line py-2">Camera sent no entry/exit direction</td>
+                        <td class="border-b border-line py-2 text-right tabular-nums">{{ number_format($q['excluded_no_direction']) }}</td>
+                    </tr>
+                </x-data-table>
             </x-panel-card>
         </div>
-    @endif
 
-    @if ($section === 'quality' && $this->canSeeOps)
-        <x-panel-card class="mb-6">
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                        <flux:icon icon="signal" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visit pairing quality</p>
-                        <p class="mt-1 text-sm text-ink-2">How cleanly entry and exit reads became visits</p>
-                    </div>
-                </div>
-            </x-slot:header>
-            <p class="text-[30px] font-semibold leading-none tracking-tight text-ink">
-                {{ $this->quality['pairing_quality'] === null ? '—' : $this->quality['pairing_quality'].'%' }}
-            </p>
-            <p class="mt-2 text-[13px] text-ink-2">
-                {{ number_format($this->quality['pairable_reads']) }} reads → {{ number_format($this->quality['paired_visits']) }} paired visits
-                · {{ number_format($this->quality['unmatched_reads']) }} unmatched reads
-            </p>
-        </x-panel-card>
-
-        <div class="grid grid-cols-4 gap-4 max-lg:grid-cols-2 max-sm:grid-cols-1">
-            <x-kpi-card label="Plate reads received" :value="number_format($this->quality['reads'])" icon="bars-3" />
-            <x-kpi-card label="Entries" :value="number_format($this->quality['entries'])" icon="arrow-right" />
-            <x-kpi-card label="Exits" :value="number_format($this->quality['exits'])" icon="arrow-left" />
-            <x-kpi-card label="Successfully paired visits" :value="number_format($this->quality['paired_visits'])" icon="check-circle" />
-            <x-kpi-card label="Orphan entries" :value="number_format($this->quality['orphan_entries'])" icon="information-circle" />
-            <x-kpi-card label="Orphan exits" :value="number_format($this->quality['orphan_exits'])" icon="information-circle" />
-            <x-kpi-card label="Camera uptime" :value="$this->quality['camera_uptime'] === null ? '—' : $this->quality['camera_uptime'].'%'" icon="signal" />
-            <x-kpi-card label="Cameras currently offline" :value="number_format($this->quality['cameras_offline'])" icon="video-camera" />
-        </div>
+        <details class="tf-disclosure mt-4 rounded-tf border border-line bg-surface px-4 sm:px-5">
+            <summary>How these numbers are calculated</summary>
+            <ul class="list-disc space-y-1.5 pb-4 pl-5 text-[13px] leading-snug text-ink-2">
+                <li><strong class="text-ink">Received reads</strong> counts every plate read captured in the period. <strong class="text-ink">Eligible reads</strong> drops duplicates, unreadable plates and reads with no direction; each excluded read is counted once, under the first reason that applies.</li>
+                <li><strong class="text-ink">Matched share</strong> is two reads per matched visit (one entry, one exit) divided by eligible reads. It can never exceed twice the number of eligible exit reads, so a site with few exit reads will show a low share even if every exit was matched.</li>
+                <li><strong class="text-ink">Entries without matching exits</strong> are visits that waited longer than {{ (int) config('trafficflow.orphan_after_hours') }} hours without an exit and were closed as unmatched. Entries still within that window are listed separately as waiting.</li>
+                <li><strong class="text-ink">Exits without matching entries</strong> are eligible exit reads that no visit claimed — typically a vehicle whose entry was missed or misread.</li>
+                <li>Reads and visits are different units: one visit can absorb a re-read at the gate, so these rows are not expected to add up to the received total. Unlike the other tabs, this tab counts every vehicle, including staff and regulars.</li>
+            </ul>
+        </details>
     @endif
+    </div>
 </div>

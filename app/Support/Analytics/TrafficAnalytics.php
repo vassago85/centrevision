@@ -143,13 +143,17 @@ class TrafficAnalytics
      * its full duration. Security "long dwell" alerts are surfaced
      * separately in {@see SecurityAnalytics}.
      *
-     * @return array{average: int|null, median: int|null}
+     * `sample` is the number of completed, matched visits behind the figures,
+     * so the UI can say how much evidence a "typical stay" rests on.
+     *
+     * @return array{average: int|null, median: int|null, sample: int}
      */
     public function dwellSummary(DateRange $range): array
     {
         $row = $this->baseQuery($range)
             ->closed()
             ->whereNotNull('dwell_minutes')
+            ->selectRaw('count(*) as sample')
             ->selectRaw('avg(dwell_minutes) as average')
             ->selectRaw('percentile_cont(0.5) within group (order by dwell_minutes) as median')
             // toBase keeps the scopes but returns a plain row: these are
@@ -161,7 +165,17 @@ class TrafficAnalytics
         return [
             'average' => $row?->average === null ? null : (int) round((float) $row->average),
             'median' => $row?->median === null ? null : (int) round((float) $row->median),
+            'sample' => (int) ($row->sample ?? 0),
         ];
+    }
+
+    /**
+     * True when a stay figure rests on fewer completed visits than the
+     * configured minimum, and period-change claims should be suppressed.
+     */
+    public static function isLowStaySample(int $sample): bool
+    {
+        return $sample < max(1, (int) config('trafficflow.analytics.min_stay_sample'));
     }
 
     /**
@@ -199,12 +213,18 @@ class TrafficAnalytics
      * dashboard's grouped "today vs yesterday" chart, where each series is
      * one calendar day rather than an arbitrary window.
      *
+     * With `$until`, counting stops at that time of day and the series ends
+     * at its hour, so hours that have not happened yet are absent rather
+     * than reported as measured zeroes.
+     *
      * @return Collection<int, array{hour: int, label: string, count: int}>
      */
-    public function visitsByHourOnDay(CarbonInterface $day): Collection
+    public function visitsByHourOnDay(CarbonInterface $day, ?CarbonInterface $until = null): Collection
     {
         $start = $day->copy()->startOfDay();
-        $end = $day->copy()->endOfDay();
+        $end = $until === null
+            ? $day->copy()->endOfDay()
+            : $day->copy()->setTime($until->hour, $until->minute, $until->second);
 
         $counts = Visit::query()
             ->excludingRecurring()
@@ -213,7 +233,7 @@ class TrafficAnalytics
             ->groupBy('hour')
             ->pluck('total', 'hour');
 
-        return collect(range(0, 23))->map(fn (int $hour) => [
+        return collect(range(0, $until === null ? 23 : $until->hour))->map(fn (int $hour) => [
             'hour' => $hour,
             'label' => sprintf('%02d:00', $hour),
             'count' => (int) ($counts[$hour] ?? 0),
@@ -236,6 +256,35 @@ class TrafficAnalytics
             ->excludingRecurring()
             ->open()
             ->count();
+    }
+
+    /**
+     * Of the shopper visits that finished in the last `$days` days, how many
+     * ended on a matched exit read rather than timing out as orphaned. Open
+     * visits have not finished, so they are left out. A low share means exits
+     * are being missed, and the live on-site count carries vehicles that have
+     * already left.
+     *
+     * @return array{matched: int, finished: int, percent: float|null}
+     */
+    public function exitMatchRate(int $days = 7): array
+    {
+        $row = Visit::query()
+            ->excludingRecurring()
+            ->where('entered_at', '>=', Date::now()->subDays($days))
+            ->selectRaw("count(*) filter (where status = 'closed') as matched")
+            ->selectRaw("count(*) filter (where status in ('closed', 'orphaned')) as finished")
+            ->toBase()
+            ->first();
+
+        $matched = (int) ($row->matched ?? 0);
+        $finished = (int) ($row->finished ?? 0);
+
+        return [
+            'matched' => $matched,
+            'finished' => $finished,
+            'percent' => $finished > 0 ? round($matched / $finished * 100, 1) : null,
+        ];
     }
 
     /**

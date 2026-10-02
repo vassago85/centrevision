@@ -116,3 +116,46 @@ it('leaves unknown reads and repeat photos out of the pairing ratio', function (
         ->and($summary['unmatched_reads'])->toBe(0)
         ->and($summary['orphan_exits'])->toBe(0);
 });
+
+it('explains every excluded read once, so received minus eligible reconciles', function () {
+    PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'GOOD01GP',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->subHours(3),
+    ]);
+    $exit = PlateEvent::factory()->for($this->exit)->create([
+        'plate_number' => 'GOOD01GP',
+        'direction' => PlateDirection::Out,
+        'captured_at' => Date::now()->subHours(2),
+    ]);
+    // A repeat photo with no direction is a duplicate first, not also a
+    // missing-direction read.
+    PlateEvent::factory()->for($this->exit)->create([
+        'plate_number' => 'GOOD01GP',
+        'direction' => null,
+        'captured_at' => Date::now()->subHours(2)->addSeconds(3),
+        'superseded_by_event_id' => $exit->id,
+    ]);
+    PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'UNKNOWN',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->subHour(),
+    ]);
+    PlateEvent::factory()->for($this->entrance)->create([
+        'plate_number' => 'NODIR1GP',
+        'direction' => null,
+        'captured_at' => Date::now()->subMinutes(30),
+    ]);
+
+    $summary = $this->quality->summary($this->range);
+
+    expect($summary['reads'])->toBe(5)
+        ->and($summary['pairable_reads'])->toBe(2)
+        ->and($summary['excluded_duplicates'])->toBe(1)
+        ->and($summary['excluded_unreadable'])->toBe(1)
+        ->and($summary['excluded_no_direction'])->toBe(1)
+        ->and($summary['excluded_duplicates'] + $summary['excluded_unreadable'] + $summary['excluded_no_direction'])
+        ->toBe($summary['reads'] - $summary['pairable_reads'])
+        ->and($summary['eligible_entries'])->toBe(1)
+        ->and($summary['eligible_exits'])->toBe(1);
+});

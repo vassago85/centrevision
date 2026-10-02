@@ -50,23 +50,58 @@ it('renders the four security status cards with the commercial labels', function
     // with the underlying counts. Names are stable identifiers a security
     // operator glances at, so any rename here is a real product change.
     Livewire::test('pages::security')
-        ->assertSee('Over Dwell')
-        ->assertSee('Odd Hour')
-        ->assertSee('Multi-entry')
-        ->assertSee('Missing Exit')
+        ->assertSee('Over dwell')
+        ->assertSee('Odd hours')
+        ->assertSee('Multiple entries')
+        ->assertSee('Missing exits')
         // Old labels should be gone — they hid the fact that missing
         // exits aren't a security incident by default.
         ->assertDontSee('Over threshold now')
         ->assertDontSee('No exit recorded');
 });
 
-it('links the Missing Exit card to the Data Quality section of Reports', function () {
+it('links the Missing exits card to the System health tab of Reports', function () {
     // Missing exits are almost always a pairing/camera problem. The
     // Security card exposes the count but the diagnosis belongs to
     // Reports → Data quality, so the card is a deep link.
     Livewire::test('pages::security')
-        ->assertSeeHtml('href="'.route('reports', ['section' => 'quality']).'"')
-        ->assertSee('usually a pairing issue');
+        ->assertSeeHtml('href="'.route('reports', ['tab' => 'health']).'"')
+        ->assertSee('usually a pairing issue')
+        ->assertSee('see System health');
+});
+
+it('shows one list at a time with live counts on each tab', function () {
+    openVisit($this->site, 'LONG01GP', 7);
+
+    Livewire::test('pages::security')
+        ->assertSet('view', 'dwell')
+        ->assertSee('Over threshold (1)')
+        ->assertSee('LONG01GP')
+        ->set('view', 'emails')
+        ->assertDontSee('LONG01GP')
+        ->assertSee('No alert emails sent yet');
+});
+
+it('falls back to the dwell list for an unknown view', function () {
+    Livewire::withQueryParams(['view' => 'nonsense'])
+        ->test('pages::security')
+        ->assertSet('view', 'dwell');
+});
+
+it('offers an Enable alerts shortcut while alerts are off', function () {
+    app(App\Support\Tenancy::class)->setCurrentSiteId($this->site->id);
+
+    Livewire::test('pages::security')
+        ->assertSee('Email alerts are off for this site.')
+        ->assertSeeHtml('href="'.route('settings', ['tab' => 'alerts']).'"');
+});
+
+it('drops the Enable alerts shortcut once alerts are on', function () {
+    $this->site->update(['settings' => ['dwell_alert_hours' => 4, 'alerts' => ['enabled' => true]]]);
+    app(App\Support\Tenancy::class)->setCurrentSiteId($this->site->id);
+
+    Livewire::test('pages::security')
+        ->assertDontSee('Email alerts are off for this site.');
 });
 
 it('rejects a threshold that is not on the menu', function () {
@@ -259,7 +294,8 @@ it('shows the latest camera photo and opens it', function () {
         'jpeg-bytes',
     );
 
-    Livewire::test('pages::security')
+    Livewire::withQueryParams(['view' => 'detections'])
+        ->test('pages::security')
         ->assertSee('Latest detections')
         ->assertDontSee('Latest photos')
         ->assertSee('PHOTO1GP')
@@ -278,7 +314,8 @@ it('lists a detection without a Photos button once the jpeg is gone', function (
         'captured_at' => Date::now()->subMinutes(5),
     ]);
 
-    Livewire::test('pages::security')
+    Livewire::withQueryParams(['view' => 'detections'])
+        ->test('pages::security')
         ->assertSee('NOPHOTOGP')
         ->assertDontSee('data-test="view-captures-', false);
 });

@@ -5,6 +5,7 @@ namespace App\Support\Ingestion;
 use App\Jobs\ProcessHikvisionWebhook;
 use App\Models\PlateEvent;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -55,6 +56,23 @@ class PlateCaptureStore
         sort($found);
 
         return array_values(array_unique($found));
+    }
+
+    public static function retentionHours(): int
+    {
+        return max(0, (int) config('trafficflow.webhook_capture_hours'));
+    }
+
+    /**
+     * "5 days" / "36 hours" — how long photos stay on disk, for UI copy.
+     */
+    public static function retentionLabel(): string
+    {
+        $hours = static::retentionHours();
+
+        return $hours > 0 && $hours % 24 === 0
+            ? ($hours / 24).' '.Str::plural('day', $hours / 24)
+            : $hours.' '.Str::plural('hour', $hours);
     }
 
     public function pathFor(PlateEvent $event, int $index): ?string

@@ -239,3 +239,18 @@ it('watches the currently-focused plate from the header action', function () {
         ->and($entry->site_id)->toBe($this->site->id);
 });
 
+
+it('says how long camera photos are kept and marks expired ones', function () {
+    config(['trafficflow.webhook_capture_hours' => 120]);
+    actingAsTenant(User::factory()->ownerAdmin($this->owner)->create());
+
+    PlateEvent::factory()->for($this->camera)->create([
+        'plate_number' => 'OLDPIC1',
+        'captured_at' => Date::now()->subDays(6),
+    ]);
+
+    Livewire::withQueryParams(['from' => Date::now()->subDays(7)->toDateString()])
+        ->test('pages::activity')
+        ->assertSee('Camera photos are kept for 5 days')
+        ->assertSee('Photo expired');
+});

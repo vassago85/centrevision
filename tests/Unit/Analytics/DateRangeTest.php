@@ -62,3 +62,23 @@ it('can shift a window back a month or a year for comparison', function () {
         ->and($range->comparisonRange('month')?->from->toDateString())->toBe('2026-07-24')
         ->and($range->comparisonRange('year')?->from->toDateString())->toBe('2025-08-24');
 });
+
+it('stops the comparison at the same elapsed time while the window is still running', function () {
+    $today = DateRange::make('today')->elapsedComparisonRange('previous');
+    $week = DateRange::make('7d')->elapsedComparisonRange('previous');
+
+    // 15:30 today is compared with yesterday up to 15:30, not all of yesterday.
+    expect($today->from->toDateTimeString())->toBe('2026-08-23 00:00:00')
+        ->and($today->to->toDateTimeString())->toBe('2026-08-23 15:30:00')
+        ->and($week->from->toDateTimeString())->toBe('2026-08-11 00:00:00')
+        ->and($week->to->toDateTimeString())->toBe('2026-08-17 15:30:00');
+});
+
+it('leaves the comparison whole once the window has finished', function () {
+    $range = DateRange::make('yesterday');
+
+    expect($range->isInProgress())->toBeFalse()
+        ->and($range->elapsedComparisonRange('previous')->to->toDateTimeString())
+        ->toBe($range->comparisonRange('previous')->to->toDateTimeString())
+        ->and($range->elapsedComparisonRange('none'))->toBeNull();
+});

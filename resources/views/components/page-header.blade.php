@@ -3,11 +3,11 @@
     'subtitle' => null,
 ])
 
-<div {{ $attributes->class('mb-5 flex flex-wrap items-center justify-between gap-3') }}>
-    <div>
-        <h1 class="text-[17px] font-semibold text-ink">{{ $title }}</h1>
+<div {{ $attributes->class('mb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-3') }}>
+    <div class="min-w-0">
+        <h1 class="text-[24px] font-semibold leading-tight tracking-tight text-ink">{{ $title }}</h1>
         @if ($subtitle)
-            <p class="mt-0.5 text-[13px] text-ink-2">{{ $subtitle }}</p>
+            <p class="mt-1 text-[13px] text-ink-2">{{ $subtitle }}</p>
         @endif
     </div>
 

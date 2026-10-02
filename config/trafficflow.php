@@ -94,6 +94,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Confidence rules for displayed metrics
+    |--------------------------------------------------------------------------
+    |
+    | Presentation thresholds, not statistics: below them the dashboard and
+    | reports show a low-sample or reliability caveat and stop making
+    | period-change claims. They change no calculation. The defaults are
+    | placeholders until product agrees the real values.
+    |
+    */
+
+    'analytics' => [
+        // Completed matched visits needed before a typical-stay figure is
+        // shown without a low-sample warning or a period comparison.
+        'min_stay_sample' => (int) env('TRAFFICFLOW_MIN_STAY_SAMPLE', 10),
+
+        // Share of recently finished visits that must end on a matched exit
+        // before the live on-site count is shown without a reliability
+        // warning, and the window it is measured over.
+        'on_site_min_exit_match_percent' => (float) env('TRAFFICFLOW_ON_SITE_MIN_EXIT_MATCH_PERCENT', 50),
+        'on_site_exit_match_days' => 7,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Security heuristics
     |--------------------------------------------------------------------------
     */

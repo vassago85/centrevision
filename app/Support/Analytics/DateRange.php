@@ -129,13 +129,13 @@ class DateRange
      */
     public function previous(): self
     {
-        $length = $this->from->diffInSeconds($this->to);
+        $end = $this->from->copy()->subMicrosecond();
 
         return new self(
             $this->key.'_previous',
             'Previous '.$this->label,
-            $this->from->copy()->subSeconds($length + 1),
-            $this->from->copy()->subSecond(),
+            $end->copy()->sub($this->from->diff($this->to)),
+            $end,
         );
     }
 
@@ -176,6 +176,39 @@ class DateRange
             'year' => $this->shifted('year'),
             default => null,
         };
+    }
+
+    /**
+     * The comparison window cut to the same elapsed length as this one. While
+     * this window is still running (Today at 11:04, Last 7 days ending
+     * tonight) the comparison stops at the matching moment instead of
+     * counting its whole length, so a partial day is never set against a
+     * full one. Finished windows get the plain comparisonRange().
+     */
+    public function elapsedComparisonRange(string $mode, ?CarbonInterface $now = null): ?self
+    {
+        $comparison = $this->comparisonRange($mode);
+        $now ??= Date::now();
+
+        if ($comparison === null || ! $this->isInProgress($now)) {
+            return $comparison;
+        }
+
+        $cut = $comparison->from->copy()->addSeconds((int) $this->from->diffInSeconds($now));
+
+        return new self(
+            $comparison->key,
+            $comparison->label,
+            $comparison->from,
+            $cut->lt($comparison->to) ? $cut : $comparison->to,
+        );
+    }
+
+    public function isInProgress(?CarbonInterface $now = null): bool
+    {
+        $now ??= Date::now();
+
+        return $now->gt($this->from) && $now->lt($this->to);
     }
 
     public function shifted(string $unit): self

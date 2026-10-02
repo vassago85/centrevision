@@ -372,7 +372,7 @@ new #[Title('Cameras')] class extends Component {
     <x-page-header title="Cameras" subtitle="Devices feeding this site">
         <x-slot:actions>
             @if ($this->canManageCameras)
-                <flux:button size="sm" variant="primary" wire:click="add">Add camera</flux:button>
+                <flux:button size="sm" variant="primary" icon="plus" wire:click="add">Add camera</flux:button>
             @endif
         </x-slot:actions>
     </x-page-header>
@@ -381,9 +381,9 @@ new #[Title('Cameras')] class extends Component {
         {{-- Security operators land here to check that cameras are alive.
              The banner tells them plainly that camera config is not theirs
              to change, so they know to escalate to the site owner. --}}
-        <div class="mb-5 rounded-lg border border-line bg-surface-2 p-3 text-sm text-ink-2">
+        <x-notice tone="info" class="mb-4">
             You are viewing cameras in read-only mode. Ask the site owner to add, edit or remove a device.
-        </div>
+        </x-notice>
     @endunless
 
     {{-- Compact status strip — a single line the operator can read at a
@@ -391,7 +391,7 @@ new #[Title('Cameras')] class extends Component {
          above a mostly-empty table; on a monitoring page the table is
          the point, so we keep the summary small. --}}
     @php $summary = $this->fleetSummary; @endphp
-    <div class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-tf border border-line bg-surface px-4 py-3 text-[13px] shadow-tf-sm">
+    <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-tf border border-line bg-surface px-4 py-3 text-[13px]">
         <span class="inline-flex items-center gap-1.5">
             <flux:icon icon="video-camera" class="size-4 text-ink-muted" />
             <span class="font-semibold text-ink tabular-nums">{{ $summary['cameras'] }}</span>
@@ -425,9 +425,9 @@ new #[Title('Cameras')] class extends Component {
         </span>
     </div>
 
-    <x-panel heading="Devices">
+    <x-panel-card title="Devices" description="Health uses the newest of plate reads, connection tests and webhook heartbeats.">
         <x-data-table
-            :headers="['Camera', 'Site', 'Direction', 'Connection', 'Health', ['label' => 'Reads Today', 'align' => 'right'], 'Last Seen', ['label' => '', 'align' => 'right']]"
+            :headers="['Camera', 'Site', 'Direction', 'Connection', 'Health', ['label' => 'Reads today', 'align' => 'right'], 'Last seen', ['label' => '', 'align' => 'right']]"
             :is-empty="$this->cameras->isEmpty()"
             empty="No cameras yet. Add the first one to start ingesting plates."
         >
@@ -446,7 +446,7 @@ new #[Title('Cameras')] class extends Component {
                              hiding it for webhook devices avoids drawing eyes
                              to a value the app never actually uses. --}}
                         @if ($camera->ingestion_mode === App\Enums\IngestionMode::Stream && $camera->ip_address)
-                            <div class="mt-0.5 font-mono text-[11px] font-normal text-ink-muted">{{ $camera->ip_address }}</div>
+                            <div class="mt-0.5 font-mono text-[12px] font-normal text-ink-muted">{{ $camera->ip_address }}</div>
                         @endif
                     </td>
                     <td class="border-b border-line py-2 text-ink-2">{{ $camera->site->name }}</td>
@@ -476,30 +476,36 @@ new #[Title('Cameras')] class extends Component {
                         {{ $camera->lastSeenAt()?->diffForHumans() ?? '—' }}
                     </td>
                     <td class="border-b border-line py-2 text-right">
-                        <div class="flex justify-end gap-1">
+                        <div class="flex items-center justify-end gap-1 whitespace-nowrap">
                             @if ($this->canManageCameras)
-                                @if ($camera->ingestion_mode !== App\Enums\IngestionMode::Stream)
-                                    <flux:button size="xs" variant="ghost" wire:click="openSetup({{ $camera->id }})">Setup</flux:button>
-                                @endif
-                                @if ($camera->ingestion_mode->needsInboundReach())
-                                    <flux:button size="xs" variant="ghost" wire:click="probe({{ $camera->id }})">Test</flux:button>
-                                @endif
-                                <flux:button size="xs" variant="ghost" wire:click="edit({{ $camera->id }})">Edit</flux:button>
-                                <flux:button
-                                    size="xs"
-                                    variant="ghost"
-                                    wire:click="delete({{ $camera->id }})"
-                                    wire:confirm="Remove {{ $camera->name }} and every plate event it recorded?"
-                                >Remove</flux:button>
+                                <flux:button size="sm" variant="ghost" wire:click="edit({{ $camera->id }})">Edit</flux:button>
+                                <flux:dropdown position="bottom" align="end">
+                                    <flux:button size="sm" variant="ghost" icon="ellipsis-horizontal" :aria-label="'More actions for '.$camera->name" data-test="camera-actions-{{ $camera->id }}" />
+                                    <flux:menu>
+                                        @if ($camera->ingestion_mode !== App\Enums\IngestionMode::Stream)
+                                            <flux:menu.item icon="cog-6-tooth" wire:click="openSetup({{ $camera->id }})">Setup instructions</flux:menu.item>
+                                        @endif
+                                        @if ($camera->ingestion_mode->needsInboundReach())
+                                            <flux:menu.item icon="signal" wire:click="probe({{ $camera->id }})">Test connection</flux:menu.item>
+                                        @endif
+                                        <flux:menu.separator />
+                                        <flux:menu.item
+                                            icon="trash"
+                                            variant="danger"
+                                            wire:click="delete({{ $camera->id }})"
+                                            wire:confirm="Remove {{ $camera->name }}? This also permanently deletes every plate event it recorded."
+                                        >Remove camera</flux:menu.item>
+                                    </flux:menu>
+                                </flux:dropdown>
                             @else
-                                <span class="text-xs text-ink-muted">—</span>
+                                <span class="text-[12.5px] text-ink-muted">View only</span>
                             @endif
                         </div>
                     </td>
                 </tr>
             @endforeach
         </x-data-table>
-    </x-panel>
+    </x-panel-card>
 
     <flux:modal wire:model.self="showForm" class="md:w-[32rem]">
         <form wire:submit="save" class="space-y-5">

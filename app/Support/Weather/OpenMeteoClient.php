@@ -4,6 +4,7 @@ namespace App\Support\Weather;
 
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -104,15 +105,25 @@ class OpenMeteoClient
         float $longitude,
         string $timezone = 'Africa/Johannesburg',
     ): ?array {
-        $response = Http::acceptJson()
-            ->timeout(10)
-            ->retry(2, 250)
-            ->get(self::FORECAST_URL, [
-                'latitude' => round($latitude, 4),
-                'longitude' => round($longitude, 4),
-                'timezone' => $timezone,
-                'current' => 'temperature_2m,weather_code',
+        try {
+            $response = Http::acceptJson()
+                ->timeout(10)
+                ->retry(2, 250, throw: false)
+                ->get(self::FORECAST_URL, [
+                    'latitude' => round($latitude, 4),
+                    'longitude' => round($longitude, 4),
+                    'timezone' => $timezone,
+                    'current' => 'temperature_2m,weather_code',
+                ]);
+        } catch (ConnectionException $e) {
+            Log::warning('Open-Meteo current lookup could not connect', [
+                'message' => $e->getMessage(),
+                'lat' => $latitude,
+                'lng' => $longitude,
             ]);
+
+            return null;
+        }
 
         if (! $response->successful()) {
             Log::warning('Open-Meteo current lookup failed', [

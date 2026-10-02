@@ -6,33 +6,28 @@
 
 @if ($viewingAs !== null)
     <div
-        class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-tf border border-warning/40 bg-warning-soft px-4 py-3"
+        role="status"
+        class="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border border-warning/40 bg-warning-soft py-0 pr-1 pl-3 text-[13px] text-ink"
         data-test="impersonation-banner"
     >
-        <div class="flex items-center gap-3">
-            <span class="flex size-8 items-center justify-center rounded-full bg-warning text-white">
-                <flux:icon icon="eye" class="size-4" />
+        <p class="flex min-w-0 items-center gap-2">
+            <flux:icon icon="eye" class="size-4 shrink-0 text-ink-2" />
+            <span class="truncate">
+                <span class="font-semibold">Viewing tenant: {{ $viewingAs->organization?->name ?? 'Tenant' }}</span>
+                <span class="text-ink-2">· as {{ $viewingAs->name }}@if ($realAdmin) · signed in as {{ $realAdmin->name }}@endif</span>
             </span>
-            <div class="text-[13px] text-warning">
-                <p class="font-semibold">
-                    Viewing as {{ $viewingAs->name }}
-                    <span class="font-normal text-warning/80">
-                        · {{ $viewingAs->organization?->name ?? 'Tenant' }}
-                    </span>
-                </p>
-                @if ($realAdmin)
-                    <p class="text-[11.5px] text-warning/80">
-                        Real account: {{ $realAdmin->name }} ({{ $realAdmin->email }})
-                    </p>
-                @endif
-            </div>
-        </div>
+        </p>
 
         <form method="POST" action="{{ route('platform.impersonate.stop') }}">
             @csrf
-            <flux:button size="sm" variant="primary" type="submit" data-test="stop-impersonating">
-                Stop viewing as tenant
-            </flux:button>
+            <button
+                type="submit"
+                data-test="stop-impersonating"
+                class="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 font-semibold text-ink underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+                <flux:icon icon="x-mark" class="size-4" />
+                Stop viewing
+            </button>
         </form>
     </div>
 @endif

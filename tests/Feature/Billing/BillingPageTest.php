@@ -62,6 +62,35 @@ it('sends an unpaid invoice to the gateway', function () {
         ->and($this->gateway->checkouts)->toHaveCount(1);
 });
 
+it('flags a zero-value invoice awaiting payment without touching its status', function () {
+    $zero = Invoice::factory()->for_($this->owner)->create([
+        'number' => 'INV-ZERO-1',
+        'amount' => 0,
+        'status' => InvoiceStatus::Pending,
+    ]);
+    $due = Invoice::factory()->for_($this->owner)->create([
+        'amount' => 1800.00,
+        'status' => InvoiceStatus::Pending,
+    ]);
+
+    Livewire::test('pages::billing')
+        ->assertSee('One invoice needs checking')
+        ->assertSee('INV-ZERO-1')
+        ->assertSeeHtml('data-test="needs-review-'.$zero->id.'"')
+        ->assertDontSeeHtml('data-test="needs-review-'.$due->id.'"')
+        ->assertSee('Pay R1,800.00');
+
+    expect($zero->fresh()->status)->toBe(InvoiceStatus::Pending);
+});
+
+it('keeps the estimate apart from issued invoices', function () {
+    Livewire::test('pages::billing')
+        ->assertSee('Current period estimate')
+        ->assertSee('not yet invoiced')
+        ->assertSee('Issued invoices')
+        ->assertSee('No invoices issued yet');
+});
+
 it('will not start a checkout for another owner invoice', function () {
     $other = Invoice::factory()->for_(Organization::factory()->owner()->create())->create();
 

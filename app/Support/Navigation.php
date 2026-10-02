@@ -46,10 +46,8 @@ class Navigation
     {
         // Conceptual groups: Main (business overview) → Operations
         // (day-to-day sites and cameras) → Security (things that need
-        // attention) → Administration (billing, settings). The `group`
-        // key is picked up by the sidebar to render a subtle divider,
-        // not a heading — the plan explicitly rejected loud section
-        // labels.
+        // attention) → Administration (billing, settings). The sidebar
+        // maps the `group` key to a quiet heading.
         return [
             ['label' => 'Dashboard', 'route' => 'overview', 'icon' => 'squares-2x2', 'group' => 'main'],
             ['label' => 'Reports', 'route' => 'reports', 'icon' => 'document-chart-bar', 'group' => 'main'],
@@ -63,7 +61,7 @@ class Navigation
             ['label' => 'Security', 'route' => 'security', 'icon' => 'shield-exclamation', 'tone' => 'danger', 'group' => 'security'],
             ['label' => 'Watchlist', 'route' => 'watchlist', 'icon' => 'bell-alert', 'tone' => 'danger', 'group' => 'security'],
 
-            ['label' => 'Sub-accounts', 'route' => 'shops', 'icon' => 'user-group', 'group' => 'admin'],
+            ['label' => 'Shops & access', 'route' => 'shops', 'icon' => 'user-group', 'group' => 'admin'],
             ['label' => 'Billing', 'route' => 'billing', 'icon' => 'credit-card', 'group' => 'admin'],
             ['label' => 'Settings', 'route' => 'settings', 'icon' => 'cog-6-tooth', 'group' => 'admin'],
         ];

@@ -12,6 +12,7 @@
          a table. --}}
     <x-placeholder size="compact">{{ $empty }}</x-placeholder>
 @else
+    <div class="relative -mx-1 overflow-x-auto px-1">
     <table data-tf-table {{ $attributes->class('w-full border-collapse text-[13px]') }}>
         @if ($headers)
             <thead>
@@ -26,7 +27,7 @@
                             $srOnly = $label === '' ? ($header['aria-label'] ?? 'Actions') : null;
                         @endphp
                         <th @class([
-                            'border-b border-line py-2 font-semibold text-ink-2',
+                            'whitespace-nowrap border-b border-line py-2 text-[12.5px] font-semibold text-ink-2',
                             'text-left' => $align === 'left',
                             'text-right' => $align === 'right',
                         ])>
@@ -45,4 +46,5 @@
             {{ $slot }}
         </tbody>
     </table>
+    </div>
 @endif

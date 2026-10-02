@@ -7,7 +7,7 @@
     $max = $max > 0 ? $max : 1;
 @endphp
 
-<div {{ $attributes->class('overflow-x-auto') }}>
+<div {{ $attributes->class('relative overflow-x-auto') }}>
     <table class="w-full border-collapse text-[11px]">
         <thead>
             <tr>

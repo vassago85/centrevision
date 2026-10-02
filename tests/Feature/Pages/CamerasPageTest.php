@@ -145,8 +145,8 @@ it('renames the operational columns to Reads Today and Last Seen', function () {
         // this page describes ingestion activity. "Last Seen" (any signal
         // from the camera) rather than "Last Read" (only plate reads),
         // because a quiet-but-alive camera should not look alarming.
-        ->assertSee('Reads Today')
-        ->assertSee('Last Seen')
+        ->assertSee('Reads today')
+        ->assertSee('Last seen')
         ->assertDontSee('Events today')
         ->assertDontSee('Last event')
         ->assertDontSee('Last Read');

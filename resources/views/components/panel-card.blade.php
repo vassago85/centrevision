@@ -1,20 +1,34 @@
 @props([
-    'padding' => 'p-5',
+    'padding' => 'p-4 sm:p-5',
+    'title' => null,
+    'description' => null,
 ])
 
 {{--
-    The mockup's dashboard cards: white, rounded, softly shadowed, with a
-    header row that hosts the title on the left and any actions on the right.
-
-    The `header` slot renders inside the card, spans the full width, and sits
-    above the main content. Callers can drop any Blade in there.
+    White card with an optional header row: title + description on the left,
+    `actions` on the right. The free-form `header` slot is still honoured for
+    callers that need a custom layout.
 --}}
-<div {{ $attributes->class(['rounded-tf border border-line bg-surface shadow-tf-sm', $padding]) }}>
-    @isset($header)
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+<div {{ $attributes->class(['min-w-0 rounded-tf border border-line bg-surface', $padding]) }}>
+    @if ($title || isset($actions))
+        <div class="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <div class="min-w-0">
+                @if ($title)
+                    <h2 class="text-[15px] font-semibold text-ink">{{ $title }}</h2>
+                @endif
+                @if ($description)
+                    <p class="mt-0.5 text-[13px] leading-snug text-ink-2">{{ $description }}</p>
+                @endif
+            </div>
+            @isset($actions)
+                <div class="flex flex-wrap items-center gap-2">{{ $actions }}</div>
+            @endisset
+        </div>
+    @elseif (isset($header))
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
             {{ $header }}
         </div>
-    @endisset
+    @endif
 
     {{ $slot }}
 </div>

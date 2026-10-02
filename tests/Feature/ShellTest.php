@@ -30,7 +30,7 @@ it('shows owners the full tab bar', function () {
         ->assertSee('Cameras')
         ->assertSee('Security')
         ->assertSee('Watchlist')
-        ->assertSee('Sub-accounts')
+        ->assertSee('Shops & access')
         ->assertSee('Billing')
         ->assertSee('centre')
         ->assertSee('vision');
@@ -49,7 +49,7 @@ it('hides owner-only tabs from shop users', function () {
         ->assertDontSee('>Cameras<', false)
         ->assertDontSee('>Security<', false)
         ->assertDontSee('>Watchlist<', false)
-        ->assertDontSee('>Sub-accounts<', false)
+        ->assertDontSee('>Shops &amp; access<', false)
         ->assertDontSee('>Billing<', false);
 });
 

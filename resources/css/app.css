@@ -150,6 +150,32 @@
     body {
         line-height: 1.5;
     }
+
+    [x-cloak] {
+        display: none !important;
+    }
+}
+
+/* Native disclosure used for expandable help and secondary detail. */
+details.tf-disclosure > summary {
+    @apply flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg text-[14px] font-semibold text-ink;
+}
+
+details.tf-disclosure > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.tf-disclosure > summary::before {
+    content: '';
+    @apply size-2 shrink-0 rotate-[-45deg] border-r-2 border-b-2 border-ink-muted transition-transform;
+}
+
+details.tf-disclosure[open] > summary::before {
+    @apply rotate-45;
+}
+
+details.tf-disclosure > summary:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
 }
 
 /*
@@ -187,4 +213,22 @@ input:focus[data-flux-control],
 textarea:focus[data-flux-control],
 select:focus[data-flux-control] {
     @apply outline-hidden ring-2 ring-accent ring-offset-2 ring-offset-surface;
+}
+
+/*
+ * Desktop keeps Flux's compact 32–40px controls; once the sidebar collapses,
+ * or on any touch screen, every control grows to a 44px target.
+ */
+@media (max-width: 1023.98px), (pointer: coarse) {
+    [data-flux-button],
+    input[data-flux-control]:not([type='checkbox'], [type='radio']),
+    select,
+    [data-tf-table] td > button,
+    nav[role='navigation'] :is(a, button) {
+        min-height: 2.75rem;
+    }
+
+    [data-flux-button] {
+        min-width: 2.75rem;
+    }
 }

@@ -1,18 +1,20 @@
 <?php
 
+use App\Enums\PlateDirection;
 use App\Enums\WatchlistKind;
 use App\Models\Camera;
 use App\Models\PlateEvent;
 use App\Models\Scopes\SiteScope;
 use App\Models\Visit;
-use App\Models\WatchlistPlate;
 use App\Support\Analytics\DateRange;
-use App\Support\Analytics\DayContextAnalytics;
 use App\Support\Analytics\SecurityAnalytics;
 use App\Support\Analytics\TrafficAnalytics;
+use App\Support\PlateNumber;
 use App\Support\Tenancy;
 use App\Support\Weather\CurrentWeather;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
@@ -29,28 +31,8 @@ new #[Title('Dashboard')] class extends Component
     public string $rangeKey = 'today';
 
     /**
-     * When true, public-holiday days are dropped from the "Visits Over Time"
-     * chart so a run of holidays doesn't make an otherwise ordinary week
-     * look thin. Off by default so every headline number the dashboard has
-     * ever reported stays exactly the same until the owner opts in.
-     */
-    #[Url(as: 'exclude_holidays', keep: true)]
-    public bool $excludeHolidays = false;
-
-    /**
-     * Parallel to $excludeHolidays: when on, wet days (see
-     * DayContextAnalytics::WET_LABELS) are dropped from the "Visits Over Time"
-     * chart so an owner comparing this week to last isn't reading weather
-     * noise as a real trend. Off by default so the numbers stay comparable
-     * to what the dashboard has always shown until the owner opts in.
-     */
-    #[Url(as: 'exclude_wet', keep: true)]
-    public bool $excludeWet = false;
-
-    /**
-     * Optional camera filter for the plate-level "Latest activity" card.
-     * Aggregate KPIs and charts stay site-wide — shoppers-per-camera is
-     * useful, but a return-rate that changes when you flip cameras isn't.
+     * Optional camera filter for the plate-level "Recent activity" card.
+     * Aggregate cards and the chart stay site-wide.
      */
     #[Url(as: 'camera', keep: true)]
     public ?int $cameraId = null;
@@ -78,10 +60,8 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * Active cameras of the current site — used to render the Latest
-     * activity filter. Empty for shops (no plate-level UI to filter) and
-     * for the "all sites" view where a single camera list would be
-     * meaningless across tenants.
+     * Active cameras of the current site, for the Recent activity filter.
+     * Empty for shops (no plate-level UI) and for the "all sites" view.
      *
      * @return Collection<int, Camera>
      */
@@ -124,6 +104,28 @@ new #[Title('Dashboard')] class extends Component
         return DateRange::make($this->rangeKey);
     }
 
+    /**
+     * The previous period cut to the same elapsed time, so Today at 11:04 is
+     * compared with yesterday up to 11:04, never with all of yesterday.
+     */
+    #[Computed]
+    public function comparisonRange(): DateRange
+    {
+        return $this->range->elapsedComparisonRange('previous');
+    }
+
+    #[Computed]
+    public function comparisonCaption(): string
+    {
+        if (! $this->range->isInProgress()) {
+            return $this->isToday ? 'vs yesterday' : 'vs previous 7 days';
+        }
+
+        return $this->isToday
+            ? 'vs yesterday to '.now()->format('H:i')
+            : 'vs previous 7 days to the same point';
+    }
+
     #[Computed]
     public function analytics(): TrafficAnalytics
     {
@@ -139,11 +141,6 @@ new #[Title('Dashboard')] class extends Component
             ?? ($tenancy->isShop() ? $tenancy->organization()?->name : 'Dashboard');
     }
 
-    /**
-     * True when the range picker is showing "Today". The dashboard reshapes
-     * around this: single-day comparisons make period-over-period charts
-     * meaningless, so today mode swaps them out for pulse-of-the-day cards.
-     */
     #[Computed]
     public function isToday(): bool
     {
@@ -151,13 +148,9 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * How often the dashboard re-fetches itself. Today's numbers move minute
-     * by minute so they warrant a tight cadence; a 7-day view is still
-     * operational — On Site Now is live regardless of the range — but the
-     * historical bars barely move between polls, so a slightly slower
-     * cadence keeps the database sane. The browser suspends wire:poll
-     * automatically when the tab is backgrounded, so an idle dashboard
-     * costs nothing.
+     * Today's numbers move minute by minute, so they poll tightly; the 7-day
+     * view still carries the live on-site count but its bars barely move.
+     * The browser suspends wire:poll when the tab is backgrounded.
      */
     #[Computed]
     public function pollInterval(): string
@@ -166,11 +159,8 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * True when the tenant's currently-viewed sites include at least one
-     * exit-capable camera. When false the dashboard is honest about the
-     * data it does not have — dwell and "currently on site" become
-     * meaningless without exit events, so we swap them for figures that
-     * still work with entries-only cameras.
+     * Without an exit-capable camera there is no honest on-site count or
+     * stay length, so those cards explain what is missing instead.
      */
     #[Computed]
     public function hasExitTracking(): bool
@@ -179,235 +169,191 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * The Dashboard KPI row. Five cards on an exit-tracking site, led by
-     * "On Site Now" — the whole point of the operational Dashboard is to
-     * answer "how full are we right now?". Entry-only sites cannot answer
-     * that honestly, so their row is a 4-card shape with the substitutes
-     * (Peak hour, Repeat visitors) that DO work without exit cameras.
-     *
-     * All five cards share the same shape so the view is a straight loop.
-     *
-     * @return array<int, array<string, mixed>>
+     * @return array<int, array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}>
      */
     #[Computed]
-    public function kpis(): array
+    public function cards(): array
     {
-        $range = $this->range();
-        $previous = $range->previous();
+        $range = $this->range;
+        $previous = $this->comparisonRange;
         $a = $this->analytics();
 
         $visits = $a->totalVisits($range);
-        $prevVisits = $a->totalVisits($previous);
-
         $unique = $a->uniqueVehicles($range);
-        $prevUnique = $a->uniqueVehicles($previous);
 
-        $vsLabel = $this->isToday ? 'vs yesterday' : 'vs previous period';
-
-        $visitorCards = [
+        return [
+            $this->onSiteCard(),
             [
-                'label' => $this->isToday ? 'Visits Today' : 'Visits',
+                'label' => $this->isToday ? 'Visits today' : 'Visits',
                 'value' => number_format($visits),
-                'icon' => 'truck',
-                'compare' => $a->comparison($visits, $prevVisits),
-                'vs' => $vsLabel,
+                'icon' => 'arrow-right-end-on-rectangle',
+                'delta' => $this->delta($visits, $a->totalVisits($previous)),
+                'comparison' => $this->comparisonCaption.' · every arrival counts, including repeat trips',
+                'warning' => null,
             ],
             [
-                'label' => 'Unique Visitors',
+                'label' => 'Unique vehicles',
                 'value' => number_format($unique),
-                'icon' => 'user-group',
-                'compare' => $a->comparison($unique, $prevUnique),
-                'vs' => $vsLabel,
+                'icon' => 'truck',
+                'delta' => $this->delta($unique, $a->uniqueVehicles($previous)),
+                'comparison' => $this->comparisonCaption.' · distinct registrations detected',
+                'warning' => null,
             ],
+            $this->stayCard(),
         ];
+    }
 
-        // Entry-only sites: no "On Site Now" or dwell to report. Keep the
-        // honest substitutes we already had — peak hour + repeat visitors —
-        // so the row still says something useful.
+    /**
+     * Live count, independent of the period picker: open shopper visits
+     * right now. Flagged as unreliable when recent visits mostly time out
+     * instead of ending on a matched exit.
+     *
+     * @return array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}
+     */
+    protected function onSiteCard(): array
+    {
+        $card = ['label' => 'Vehicles on site', 'icon' => 'map-pin', 'delta' => null, 'warning' => null];
+
         if (! $this->hasExitTracking) {
-            $peak = $a->peakHour($range);
-            $repeat = $a->repeatVisitorPercentage($range);
-
             return [
-                ...$visitorCards,
-                [
-                    'label' => 'Peak hour',
-                    'value' => $peak === null ? '—' : $peak['label'],
-                    'icon' => 'chart-bar',
-                    'compare' => ['label' => $peak === null ? 'No arrivals yet' : $peak['count'].' visits', 'tone' => 'muted'],
-                    'vs' => 'busiest hour in period',
-                ],
-                [
-                    'label' => 'Repeat visitors',
-                    'value' => $repeat === null ? '—' : $repeat.'%',
-                    'icon' => 'arrow-path',
-                    'compare' => ['label' => $repeat === null ? 'No prior data' : 'plates seen 2+ times', 'tone' => 'muted'],
-                    'vs' => 'add an exit camera for dwell',
-                ],
+                ...$card,
+                'value' => '—',
+                'comparison' => 'Needs an exit camera — entry-only sites cannot tell when a vehicle leaves.',
             ];
         }
 
-        // Exit-tracking sites: On Site Now is always the lead KPI regardless
-        // of the range picker — it is a live count, not a windowed one, so
-        // it stays accurate whether the user is looking at "today" or the
-        // last seven days.
+        $a = $this->analytics();
         $onSite = $a->currentlyOnSite();
+        $capacity = app(Tenancy::class)->currentSite()?->parkingCapacity();
         $occupancy = $a->occupancyPercent();
-        $site = app(Tenancy::class)->currentSite();
-        $capacity = $site?->parkingCapacity();
 
-        $onSiteCard = [
-            'label' => 'On Site Now',
+        $comparison = 'Estimate, live now · not affected by the period';
+
+        if ($occupancy !== null && $capacity !== null) {
+            $comparison = number_format($onSite).' of '.number_format($capacity).' spaces ('.rtrim(rtrim(number_format($occupancy, 1), '0'), '.').'%) · live estimate';
+        }
+
+        $days = (int) config('trafficflow.analytics.on_site_exit_match_days', 7);
+        $exitMatch = $a->exitMatchRate($days);
+        $minimum = (float) config('trafficflow.analytics.on_site_min_exit_match_percent', 50);
+
+        return [
+            ...$card,
             'value' => number_format($onSite),
-            'icon' => 'map-pin',
-            'compare' => [
-                'label' => $onSite === 0 ? 'No open visits' : 'Live',
-                'tone' => $onSite === 0 ? 'muted' : 'up',
-            ],
-            // Occupancy is supporting text, not a competing KPI: capacity
-            // is optional and many sites will not have it configured.
-            'vs' => $occupancy === null
-                ? ($capacity === null ? 'Set parking capacity to see occupancy' : 'Live')
-                : number_format($onSite).' / '.number_format($capacity).' spaces · '.rtrim(rtrim(number_format($occupancy, 1), '0'), '.').'% occupancy',
-        ];
-
-        // Both Dashboard and Reports use the visitor-based Return Rate
-        // (returningVehicleRate) so the two surfaces cannot disagree on
-        // the same label.
-        $returnRate = $a->returningVehicleRate($range);
-        $prevReturn = $a->returningVehicleRate($previous);
-
-        $returnCard = [
-            'label' => 'Return Rate',
-            'value' => $returnRate === null ? '—' : $returnRate.'%',
-            'icon' => 'arrow-path',
-            'compare' => $a->comparison($returnRate, $prevReturn),
-            // A null return rate means the site's own history does not
-            // reach back before the reporting window, so the metric is
-            // undefined rather than genuinely 0 %. Say that instead of
-            // leaving the caption on the "seen before this period"
-            // definition, which reads as a broken zero to the customer.
-            'vs' => $returnRate === null
-                ? 'not enough history yet'
-                : 'visitors seen before this period',
-        ];
-
-        $dwell = $a->dwellSummary($range);
-        $prevDwell = $a->dwellSummary($previous);
-
-        $dwellCard = [
-            'label' => 'Average Dwell',
-            'value' => $dwell['average'] === null ? '—' : $dwell['average'].' min',
-            'icon' => 'clock',
-            'compare' => $a->comparison($dwell['average'], $prevDwell['average']),
-            'vs' => 'median '.($dwell['median'] ?? '—').' min',
-        ];
-
-        return [
-            $onSiteCard,
-            ...$visitorCards,
-            $returnCard,
-            $dwellCard,
+            'comparison' => $comparison,
+            'warning' => $exitMatch['percent'] !== null && $exitMatch['percent'] < $minimum
+                ? 'Only '.rtrim(rtrim(number_format($exitMatch['percent'], 1), '0'), '.').'% of visits in the last '.$days.' days had a matched exit, so some of these vehicles may have left.'
+                : null,
         ];
     }
 
     /**
-     * Today's hourly arrivals alongside yesterday's, for the grouped bar
-     * chart on the Today dashboard.
+     * Typical stay is the median length of completed, matched visits. Small
+     * samples are labelled and never compared with the previous period.
      *
-     * @return array{labels: array<int, string>, today: array<int, int>, yesterday: array<int, int>}
+     * @return array{label: string, value: string, icon: string, delta: string|null, comparison: string|null, warning: string|null}
      */
-    #[Computed]
-    public function hourlyTodayVsYesterday(): array
+    protected function stayCard(): array
     {
-        $today = $this->analytics->visitsByHourOnDay(now());
-        $yesterday = $this->analytics->visitsByHourOnDay(now()->subDay());
+        $card = ['label' => 'Typical stay', 'icon' => 'clock', 'delta' => null, 'warning' => null];
 
-        return [
-            'labels' => $today->pluck('label')->all(),
-            'today' => $today->pluck('count')->all(),
-            'yesterday' => $yesterday->pluck('count')->all(),
-        ];
-    }
+        if (! $this->hasExitTracking) {
+            return [...$card, 'value' => '—', 'comparison' => 'Needs an exit camera to measure how long vehicles stay.'];
+        }
 
-    /**
-     * Visits per day for the current and preceding window, side by side. Two
-     * short arrays so the grouped bar chart can just pluck them straight.
-     *
-     * Also exposes the ISO date for each label so the caller can join to
-     * day-context data (weather/holiday markers) without re-deriving dates
-     * from the "j M" chart labels — which would otherwise break at year
-     * boundaries on 90-day ranges.
-     *
-     * When the excludeHolidays toggle is on, public-holiday days are dropped
-     * from *both* series before they reach the chart. Nothing else on the
-     * dashboard is affected — KPIs still count every day, so the toggle
-     * changes what you see on this one chart and nowhere else.
-     *
-     * @return array{labels: array<int, string>, dates: array<int, string>, current: array<int, int>, previous: array<int, int>}
-     */
-    #[Computed]
-    public function visitsOverTime(): array
-    {
-        $current = $this->analytics->visitsByDay($this->range);
-        $previous = $this->analytics->visitsByDay($this->range->previous());
+        $dwell = $this->analytics()->dwellSummary($this->range);
 
-        // Line up the previous-window slot with today's slot before any
-        // filtering happens, so a dropped day removes *both* bars in the
-        // grouped chart and the remaining bars stay paired.
-        $paired = $current->values()->map(function (array $day, int $index) use ($previous): array {
+        if ($dwell['sample'] === 0 || $dwell['median'] === null) {
+            return [...$card, 'value' => '—', 'comparison' => 'No completed visits '.($this->isToday ? 'today' : 'in this period').' yet.'];
+        }
+
+        $basis = 'Median of '.number_format($dwell['sample']).' completed '.Str::plural('visit', $dwell['sample']);
+
+        if (TrafficAnalytics::isLowStaySample($dwell['sample'])) {
             return [
-                ...$day,
-                'previous' => (int) ($previous[$index]['count'] ?? 0),
+                ...$card,
+                'value' => $dwell['median'].' min',
+                'comparison' => $basis,
+                'warning' => 'Low sample — not compared with the previous period.',
             ];
-        });
-
-        if ($this->excludeHolidays) {
-            $holidayDates = array_flip(
-                app(DayContextAnalytics::class)->publicHolidayDates($this->range),
-            );
-
-            $paired = $paired
-                ->reject(fn (array $day) => isset($holidayDates[$day['date']]))
-                ->values();
         }
 
-        if ($this->excludeWet) {
-            $wetDates = array_flip(
-                app(DayContextAnalytics::class)->wetDates($this->range),
-            );
-
-            $paired = $paired
-                ->reject(fn (array $day) => isset($wetDates[$day['date']]))
-                ->values();
-        }
+        $previous = $this->analytics()->dwellSummary($this->comparisonRange);
 
         return [
-            'labels' => $paired->pluck('label')->all(),
-            'dates' => $paired->pluck('date')->all(),
-            'current' => $paired->pluck('count')->all(),
-            'previous' => $paired->pluck('previous')->all(),
+            ...$card,
+            'value' => $dwell['median'].' min',
+            'delta' => TrafficAnalytics::isLowStaySample($previous['sample']) ? null : $this->delta($dwell['median'], $previous['median']),
+            'comparison' => $basis.' · average '.$dwell['average'].' min',
+        ];
+    }
+
+    protected function delta(int|float|null $current, int|float|null $previous): ?string
+    {
+        $compare = $this->analytics()->comparison($current, $previous);
+
+        return $compare['label'] === 'No prior data' ? null : $compare['label'];
+    }
+
+    /**
+     * Hourly arrivals for the chart. Today stops at the current hour for both
+     * series, so future hours are absent rather than drawn as zeroes. The
+     * 7-day view sums each hour of day across the period.
+     *
+     * @return array{labels: array<int, string>, current: array<int, int>, previous: array<int, int>, currentLabel: string, previousLabel: string}
+     */
+    #[Computed]
+    public function hourly(): array
+    {
+        $a = $this->analytics;
+
+        if ($this->isToday) {
+            $now = now();
+            $today = $a->visitsByHourOnDay($now, $now);
+            $yesterday = $a->visitsByHourOnDay($now->copy()->subDay(), $now);
+
+            return [
+                'labels' => $today->pluck('label')->all(),
+                'current' => $today->pluck('count')->all(),
+                'previous' => $yesterday->pluck('count')->all(),
+                'currentLabel' => 'Today',
+                'previousLabel' => 'Yesterday',
+            ];
+        }
+
+        $current = $a->visitsByHour($this->range);
+        $previous = $a->visitsByHour($this->comparisonRange);
+
+        return [
+            'labels' => $current->pluck('label')->all(),
+            'current' => $current->pluck('count')->all(),
+            'previous' => $previous->pluck('count')->all(),
+            'currentLabel' => 'Last 7 days',
+            'previousLabel' => 'Previous 7 days',
         ];
     }
 
     /**
-     * Weather + holiday context for each day in the current range, keyed by
-     * ISO date. Empty collection if the site hasn't been enriched yet — the
-     * dashboard treats "no context" as "no markers", never an error.
-     *
-     * @return \Illuminate\Support\Collection<string, array<string, mixed>>
+     * @return array{hour: int, label: string, count: int}|null
      */
     #[Computed]
-    public function dayContext(): Collection
+    public function peakHour(): ?array
     {
-        return app(DayContextAnalytics::class)->forRange($this->range);
+        return $this->analytics->peakHour($this->range);
     }
 
     /**
-     * Live "now" weather pill for the header. Null when nothing worth
-     * rendering — no sites in scope, none with coordinates, or upstream
-     * failure. Cached per site by the service, so the wire:poll cycle
-     * doesn't re-hit Open-Meteo on every render.
+     * @return Collection<int, array{label: string, count: int, percent: float}>
+     */
+    #[Computed]
+    public function entryPoints(): Collection
+    {
+        return $this->analytics->topEntryPoints($this->range);
+    }
+
+    /**
+     * Live "now" weather for the header. Cached per site by the service, so
+     * the poll cycle doesn't re-hit Open-Meteo on every render.
      *
      * @return array{temp_c: float|null, weather_code: int|null, weather_label: string|null}|null
      */
@@ -418,121 +364,13 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * Extra tooltip lines for the daily chart, keyed by the chart's own
-     * "j M" label. Callers pass this straight to <x-chart annotations>.
+     * Watchlist- and security-related counts for the alert panel and bell.
      *
-     * @return array<string, array<int, string>>
-     */
-    #[Computed]
-    public function dayAnnotations(): array
-    {
-        $labels = $this->visitsOverTime['labels'];
-        $dates = $this->visitsOverTime['dates'];
-        $context = $this->dayContext;
-
-        $out = [];
-
-        foreach ($dates as $index => $iso) {
-            $ctx = $context->get($iso);
-
-            if ($ctx === null) {
-                continue;
-            }
-
-            $lines = [];
-
-            if ($ctx['is_public_holiday']) {
-                $lines[] = 'Public holiday'.($ctx['holiday_name'] ? ': '.$ctx['holiday_name'] : '');
-            }
-
-            if ($ctx['is_school_holiday']) {
-                $lines[] = 'School holiday';
-            }
-
-            if ($ctx['weather_label'] !== null && $ctx['weather_label'] !== 'Clear') {
-                // Only surface notable weather (rain/thunderstorm/fog etc.)
-                // — a "Clear" tag on every summer day would just be noise.
-                $temp = $ctx['temp_avg_c'] === null ? '' : ' · '.round((float) $ctx['temp_avg_c']).'°C';
-                $lines[] = 'Weather: '.$ctx['weather_label'].$temp;
-            }
-
-            if ($lines !== []) {
-                $out[$labels[$index]] = $lines;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * Compact list of "why did that day look different" chips rendered under
-     * the visits-over-time chart. Only days that carry a holiday flag or
-     * notable weather show up — a chip strip that lists every day is noise.
-     *
-     * @return array<int, array{label: string, kind: string, text: string}>
-     */
-    #[Computed]
-    public function notableDays(): array
-    {
-        $chips = [];
-
-        foreach ($this->visitsOverTime['dates'] as $index => $iso) {
-            $ctx = $this->dayContext->get($iso);
-
-            if ($ctx === null) {
-                continue;
-            }
-
-            $label = $this->visitsOverTime['labels'][$index];
-
-            if ($ctx['is_public_holiday']) {
-                $chips[] = [
-                    'label' => $label,
-                    'kind' => 'holiday',
-                    'text' => $ctx['holiday_name'] ?? 'Public holiday',
-                ];
-            }
-
-            if ($ctx['weather_label'] !== null && in_array($ctx['weather_label'], ['Rain', 'Thunderstorm', 'Snow'], true)) {
-                $chips[] = [
-                    'label' => $label,
-                    'kind' => 'weather',
-                    'text' => $ctx['weather_label'],
-                ];
-            }
-        }
-
-        return $chips;
-    }
-
-    /**
-     * Hour-of-day arrivals for the "Visits by Time of Day" chart, pre-plucked
-     * into the two arrays the chart component wants. Memoised so the poll
-     * loop doesn't run the same GROUP BY twice per render (once for labels,
-     * once for values).
-     *
-     * @return array{labels: array<int, string>, values: array<int, int>}
-     */
-    #[Computed]
-    public function visitsByHour(): array
-    {
-        $rows = $this->analytics->visitsByHour($this->range);
-
-        return [
-            'labels' => $rows->pluck('label')->all(),
-            'values' => $rows->pluck('count')->all(),
-        ];
-    }
-
-    /**
-     * Watchlist- and security-related counts for the alert card. Grouped so
-     * the shell can drive the notification bell off the same numbers.
-     *
-     * The bell counts events that happened *after* the user last visited
-     * /security (their `alerts_last_seen_at`), so opening the security page
-     * clears the badge until new events arrive. First-time visitors — with
-     * no acknowledgement on file yet — fall back to a 24h window so the
-     * bell is neither perpetually silent nor screaming with history.
+     * Counts events that happened *after* the user last visited /security
+     * (their `alerts_last_seen_at`), so opening the security page clears the
+     * badge until new events arrive. First-time visitors — with no
+     * acknowledgement on file yet — fall back to a 24h window so the bell is
+     * neither perpetually silent nor screaming with history.
      *
      * @return array{watchlist: int, blacklist: int, other: int, total: int}
      */
@@ -544,8 +382,6 @@ new #[Title('Dashboard')] class extends Component
 
         $windowStart = auth()->user()?->alerts_last_seen_at ?? now()->subDay();
 
-        // Watchlist / blacklist hits — plate_events since the user last
-        // acknowledged their alerts. Joined once and split by kind.
         $hitsByKind = PlateEvent::query()
             ->withoutGlobalScope(SiteScope::class)
             ->join('cameras', 'cameras.id', '=', 'plate_events.camera_id')
@@ -564,17 +400,12 @@ new #[Title('Dashboard')] class extends Component
             + (int) ($hitsByKind[WatchlistKind::Vip->value] ?? 0);
         $blacklistHits = (int) ($hitsByKind[WatchlistKind::Block->value] ?? 0);
 
-        // "Other" = anomalies from the behavioural rules on the Security page.
-        // Using the site-level dwell threshold when a site is pinned, and a
-        // sensible default when the owner is looking across every site.
+        // "Other" = anomalies from the behavioural rules on the Security page,
+        // using the site's dwell threshold when one is pinned.
         $dwellHours = (int) (app(Tenancy::class)->currentSite()?->settings['dwell_alert_hours']
             ?? config('trafficflow.security.default_dwell_alert_hours', 4));
 
-        // Only count *new* breaches: over-threshold visits that entered
-        // recently enough to have crossed the threshold since the user last
-        // checked, and multi-entry plates whose latest arrival is newer than
-        // that acknowledgement. Anything older has already been seen on the
-        // security page, so no need to re-alert.
+        // Only count breaches new since the user last checked.
         $newOverThreshold = $security->overThreshold($dwellHours)
             ->filter(fn ($visit) => $visit->entered_at->gt($windowStart->copy()->subHours($dwellHours)))
             ->count();
@@ -584,9 +415,7 @@ new #[Title('Dashboard')] class extends Component
                 $latest = end($row['times']);
 
                 return is_string($latest) && $latest !== ''
-                    // Times are strings like "14:45"; combine with today's date
-                    // to compare against the seen_at timestamp.
-                    && \Illuminate\Support\Facades\Date::createFromFormat('Y-m-d H:i', now()->toDateString().' '.$latest)
+                    && Date::createFromFormat('Y-m-d H:i', now()->toDateString().' '.$latest)
                         ?->gt($windowStart);
             })
             ->count();
@@ -599,6 +428,14 @@ new #[Title('Dashboard')] class extends Component
             'other' => $other,
             'total' => $watchlistHits + $blacklistHits + $other,
         ];
+    }
+
+    #[Computed]
+    public function alertWindowCaption(): string
+    {
+        return auth()->user()?->alerts_last_seen_at === null
+            ? 'New in the last 24 hours'
+            : 'New since you last opened Security';
     }
 
     /**
@@ -632,14 +469,9 @@ new #[Title('Dashboard')] class extends Component
     }
 
     /**
-     * The last handful of plate detections at the tenant's site(s), used by
-     * the "Latest activity" card. Backed by plate_events rather than visits
-     * so re-entries by the same vehicle are shown as separate rows — a
-     * visit that started at 12:00 and is still open would otherwise hide
-     * that same plate arriving again at 15:00.
-     *
-     * Owner-only: shop accounts see aggregate KPIs only, never individual
-     * plates.
+     * The last five plate detections, entries and exits both, from
+     * plate_events so a re-entry shows as its own row. Owner and security
+     * only: shops see aggregates, never plates.
      *
      * @return Collection<int, PlateEvent>
      */
@@ -651,14 +483,13 @@ new #[Title('Dashboard')] class extends Component
         }
 
         return $this->analytics()
-            ->recentDetections(8, $this->cameraId)
+            ->recentDetections(5, $this->cameraId)
             ->each(fn (PlateEvent $e) => $e->makeVisible('plate_number'));
     }
 
     /**
-     * Security and watchlist cards are operator content, not tenant content.
-     * We reuse `canSeePlates` because it is the same "you can see individual
-     * vehicles" gate — shops get the aggregate view either way.
+     * Security and watchlist content uses the same "can see individual
+     * vehicles" gate as plates; shops get the aggregate view either way.
      */
     #[Computed]
     public function canSeeSecurity(): bool
@@ -669,444 +500,202 @@ new #[Title('Dashboard')] class extends Component
 }; ?>
 
 <div wire:poll.{{ $this->pollInterval }}>
-    {{-- Header — the mockup's page title + range picker + bell. Shops don't
-         see the notification bell because it would only ever link to alerts
-         they aren't allowed to view. The whole dashboard re-fetches on a
-         cadence tuned to the range (see pollInterval) so KPIs, charts,
-         alerts and the latest-activity table all stay live without a
-         manual refresh. --}}
     <x-dashboard-header
         :title="$this->heading"
-        :subtitle="'What is happening at your centre · '.strtolower($this->range->label)"
+        :subtitle="$this->isToday ? 'Your centre at a glance · today' : 'Your centre at a glance · last 7 days'"
         :alert-count="$this->canSeeSecurity ? $this->alertCounts['total'] : 0"
         :show-bell="$this->canSeeSecurity"
         :weather="$this->headerWeather"
         live
     >
         <x-slot:actions>
-            <flux:select wire:model.live="rangeKey" size="sm" class="min-w-44" icon="calendar" label="Period" label:sr-only>
-                @foreach (\App\Support\Analytics\DateRange::options() as $key => $label)
+            @if (app(Tenancy::class)->hasMultipleSites())
+                <livewire:site-switcher :key="'dashboard-site'" />
+            @endif
+            <flux:select wire:model.live="rangeKey" class="min-w-40" icon="calendar" label="Period" label:sr-only>
+                @foreach (DateRange::options() as $key => $label)
                     <flux:select.option :value="$key">{{ $label }}</flux:select.option>
                 @endforeach
             </flux:select>
         </x-slot:actions>
     </x-dashboard-header>
 
-    {{-- ── KPI row ──────────────────────────────────────────────────────
-         Five cards on an exit-tracking site (led by On Site Now), four on
-         an entry-only site. The grid wraps to two columns below xl so the
-         cards never squeeze, and to one column on phones. --}}
-    <div @class([
-        'mb-6 grid gap-4 max-sm:grid-cols-1',
-        'grid-cols-5 max-xl:grid-cols-3 max-lg:grid-cols-2' => count($this->kpis) === 5,
-        'grid-cols-4 max-xl:grid-cols-2' => count($this->kpis) !== 5,
-    ])>
-        @foreach ($this->kpis as $kpi)
+    <div class="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
+        @foreach ($this->cards as $card)
             <x-kpi-card
-                :label="$kpi['label']"
-                :value="$kpi['value']"
-                :icon="$kpi['icon']"
-                :delta="$kpi['compare']['label']"
-                :delta-tone="$kpi['compare']['tone']"
-                :comparison="$kpi['vs']"
+                :label="$card['label']"
+                :value="$card['value']"
+                :icon="$card['icon']"
+                :delta="$card['delta']"
+                :comparison="$card['comparison']"
+                :warning="$card['warning']"
             />
         @endforeach
     </div>
 
-    {{-- ── Charts row ───────────────────────────────────────────────────
-         Today mode collapses the two-chart row into one wide "today vs
-         yesterday, hour by hour" chart — daily bars are meaningless for a
-         single-day range, and the hour-of-day chart is now the single most
-         useful view.  --}}
-    @if ($this->isToday)
-    <div class="mb-6">
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Today, hour by hour</p>
-                    <p class="mt-1 text-sm text-ink-2">Arrivals so far today, compared to the same hour yesterday</p>
-                </div>
-                <span class="rounded-full bg-accent-soft px-3 py-1 text-[11px] font-medium text-accent">Live</span>
-            </x-slot:header>
+    <x-panel-card
+        class="mt-4"
+        :title="$this->isToday ? 'Arrivals by hour' : 'Arrivals by hour of day'"
+        :description="$this->isToday
+            ? 'Today and yesterday, through '.now()->format('H:i').'. Later hours appear as they happen.'
+            : 'Total arrivals in each hour across the last 7 days, against the previous 7 days to the same point.'"
+    >
+        <x-slot:actions>
+            <span class="text-[13px] text-ink-2">
+                @if ($this->peakHour)
+                    Busiest: <span class="font-semibold text-ink tabular-nums">{{ $this->peakHour['label'] }}</span>
+                    · {{ number_format($this->peakHour['count']) }} {{ Str::plural('arrival', $this->peakHour['count']) }}
+                @else
+                    No arrivals yet
+                @endif
+            </span>
+        </x-slot:actions>
 
-            <x-chart
-                name="hourly-today"
-                :labels="$this->hourlyTodayVsYesterday['labels']"
-                :series="[
-                    ['label' => 'Today', 'values' => $this->hourlyTodayVsYesterday['today'], 'color' => 'accent'],
-                    ['label' => 'Yesterday', 'values' => $this->hourlyTodayVsYesterday['yesterday'], 'color' => 'accentSoft'],
-                ]"
-                :show-legend="true"
-                :height="240"
-                aria-label="Grouped bar chart comparing hourly arrivals today to the same hours yesterday"
-            />
-        </x-panel-card>
-    </div>
-    @else
-    <div class="mb-6 grid grid-cols-2 gap-4 max-lg:grid-cols-1">
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits Over Time</p>
-                    <p class="mt-1 text-sm text-ink-2">
-                        Current period vs. the previous
-                        @if ($this->excludeHolidays)
-                            <span class="text-ink-muted">· holidays hidden</span>
-                        @endif
-                        @if ($this->excludeWet)
-                            <span class="text-ink-muted">· wet days hidden</span>
-                        @endif
-                    </p>
-                </div>
-                <div class="flex flex-wrap items-center gap-2">
-                    {{-- Opt-in filters. Off by default so headline KPIs and
-                         chart bars are never quietly changed under the user;
-                         the toggles only rearrange this one chart. --}}
-                    <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
-                        <input
-                            type="checkbox"
-                            wire:model.live="excludeHolidays"
-                            class="size-3 rounded border-line text-accent focus:ring-accent"
-                        />
-                        <span>Exclude holidays</span>
-                    </label>
-                    <label class="flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:text-ink">
-                        <input
-                            type="checkbox"
-                            wire:model.live="excludeWet"
-                            class="size-3 rounded border-line text-accent focus:ring-accent"
-                        />
-                        <span>Exclude wet days</span>
-                    </label>
-                    <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">Daily</span>
-                </div>
-            </x-slot:header>
+        <x-chart
+            name="dashboard-hourly"
+            :labels="$this->hourly['labels']"
+            :series="[
+                ['label' => $this->hourly['currentLabel'], 'values' => $this->hourly['current'], 'color' => 'accent'],
+                ['label' => $this->hourly['previousLabel'], 'values' => $this->hourly['previous'], 'color' => 'accentSoft'],
+            ]"
+            :show-legend="true"
+            :height="240"
+            :aria-label="'Grouped bar chart of arrivals per hour: '.$this->hourly['currentLabel'].' compared with '.$this->hourly['previousLabel']"
+        />
+    </x-panel-card>
 
-            <x-chart
-                name="visits-over-time"
-                :labels="$this->visitsOverTime['labels']"
-                :series="[
-                    ['label' => 'This period', 'values' => $this->visitsOverTime['current'], 'color' => 'accent'],
-                    ['label' => 'Previous', 'values' => $this->visitsOverTime['previous'], 'color' => 'accentSoft'],
-                ]"
-                :annotations="$this->dayAnnotations"
-                :show-legend="true"
-                :height="220"
-                aria-label="Grouped bar chart comparing daily visits this period to the previous period"
-            />
-
-            {{-- Notable-days strip: only appears when we have context for
-                 something worth calling out (public holiday or wet weather).
-                 A dashboard with a rainy Saturday explains itself; on a run
-                 of unremarkable days the strip stays out of the way. --}}
-            @if (! empty($this->notableDays))
-                <div class="mt-3 flex flex-wrap gap-1.5">
-                    @foreach ($this->notableDays as $chip)
-                        <span @class([
-                            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-                            'bg-warning-soft text-warning' => $chip['kind'] === 'holiday',
-                            'bg-accent-soft text-accent' => $chip['kind'] === 'weather',
-                        ])>
-                            <flux:icon
-                                :icon="$chip['kind'] === 'holiday' ? 'calendar-days' : 'cloud'"
-                                class="size-3"
-                            />
-                            <span class="tabular-nums font-semibold">{{ $chip['label'] }}</span>
-                            <span>·</span>
-                            <span>{{ $chip['text'] }}</span>
-                        </span>
-                    @endforeach
-                </div>
-            @endif
-        </x-panel-card>
-
-        <x-panel-card>
-            <x-slot:header>
-                <div>
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Visits by Time of Day</p>
-                    <p class="mt-1 text-sm text-ink-2">All arrivals, hour by hour</p>
-                </div>
-                <span class="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-medium text-ink-2">This period</span>
-            </x-slot:header>
-
-            <x-chart
-                name="visits-by-hour"
-                :labels="$this->visitsByHour['labels']"
-                :values="$this->visitsByHour['values']"
-                :height="220"
-                aria-label="Bar chart of arrivals by hour of day"
-            />
-        </x-panel-card>
-    </div>
-    @endif
-
-    {{-- ── Bottom row: entry points | alerts | recent hits ──────────────
-         Shops only see the aggregate entry points; security and watchlist
-         cards are owner-only, so the shop layout collapses to a single-column
-         card so it doesn't leave a lonely tile floating on a wide screen. --}}
     <div @class([
-        'mb-6 grid gap-4',
-        'grid-cols-3 max-xl:grid-cols-2 max-md:grid-cols-1' => $this->canSeeSecurity,
-        'grid-cols-1' => ! $this->canSeeSecurity,
+        'mt-4 grid gap-4',
+        'grid-cols-2 max-lg:grid-cols-1' => $this->canSeeSecurity,
     ])>
+        <x-panel-card title="Entry points" description="Share of arrivals by entrance camera in this period">
+            @if ($this->canSeePlates)
+                <x-slot:actions>
+                    <a href="{{ route('cameras') }}" wire:navigate class="inline-flex min-h-11 items-center text-[13px] font-medium text-accent hover:underline">Cameras</a>
+                </x-slot:actions>
+            @endif
 
-        {{-- Top entry points --}}
-        <x-panel-card>
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                        <flux:icon icon="map-pin" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[13px] font-semibold text-ink">Top Entry Points</p>
-                        <p class="text-[11.5px] text-ink-muted">Share of arrivals per camera</p>
-                    </div>
-                </div>
-                <a href="{{ route('cameras') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
-            </x-slot:header>
-
-            @php $entries = $this->analytics->topEntryPoints($this->range); @endphp
-            @if ($entries->isEmpty())
-                <x-placeholder>No entrance-camera arrivals in this period.</x-placeholder>
+            @if ($this->entryPoints->isEmpty())
+                <x-empty-state title="No arrivals recorded yet" icon="map-pin">
+                    Entrance-camera arrivals for this period will be listed here.
+                </x-empty-state>
             @else
-                <table class="w-full text-[13px]">
-                    <thead>
-                        <tr class="text-left text-[11px] uppercase tracking-[0.14em] text-ink-muted">
-                            <th class="pb-2 font-semibold">Entry Point</th>
-                            <th class="pb-2 text-right font-semibold">Visits</th>
-                            <th class="pb-2 pl-3 text-right font-semibold">%</th>
+                @php $entryTotal = $this->entryPoints->sum('count') ?: 1; @endphp
+                <x-data-table :headers="['Entry point', ['label' => 'Arrivals', 'align' => 'right'], ['label' => 'Share', 'align' => 'right']]">
+                    @foreach ($this->entryPoints as $entry)
+                        <tr wire:key="entry-{{ $entry['label'] }}">
+                            <td class="border-b border-line py-2.5 text-ink">{{ $entry['label'] }}</td>
+                            <td class="border-b border-line py-2.5 text-right font-semibold tabular-nums">{{ number_format($entry['count']) }}</td>
+                            <td class="border-b border-line py-2.5 text-right tabular-nums text-ink-2">{{ number_format($entry['count'] / $entryTotal * 100, 1) }}%</td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        @php $totalCount = $entries->sum('count') ?: 1; @endphp
-                        @foreach ($entries as $entry)
-                            <tr class="border-t border-line">
-                                <td class="py-2 text-ink">{{ $entry['label'] }}</td>
-                                <td class="py-2 text-right font-semibold tabular-nums text-ink">{{ number_format($entry['count']) }}</td>
-                                <td class="py-2 pl-3 text-right tabular-nums text-ink-2">
-                                    {{ number_format($entry['count'] / $totalCount * 100, 1) }}%
-                                </td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                </table>
+                    @endforeach
+                </x-data-table>
             @endif
         </x-panel-card>
 
-        {{-- Security alerts — owner-only. --}}
         @if ($this->canSeeSecurity)
-        <x-panel-card>
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-danger-soft text-danger">
-                        <flux:icon icon="shield-exclamation" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[13px] font-semibold text-ink">Security Alerts</p>
-                        <p class="text-[11.5px] text-ink-muted">Last 24 hours</p>
-                    </div>
-                </div>
-                <a href="{{ route('security') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
-            </x-slot:header>
+            <x-panel-card title="Security & watchlist" :description="$this->alertWindowCaption">
+                <x-slot:actions>
+                    <a href="{{ route('security') }}" wire:navigate class="inline-flex min-h-11 items-center text-[13px] font-medium text-accent hover:underline">Security</a>
+                </x-slot:actions>
 
-            <ul class="flex flex-col divide-y divide-line">
-                @foreach ([
-                    ['label' => 'Watchlist Hits',  'route' => 'watchlist', 'icon' => 'bell-alert',         'tone' => 'warning', 'count' => $this->alertCounts['watchlist']],
-                    ['label' => 'Blacklist Hits',  'route' => 'watchlist', 'icon' => 'shield-exclamation', 'tone' => 'danger',  'count' => $this->alertCounts['blacklist']],
-                    ['label' => 'Other Alerts',    'route' => 'security',  'icon' => 'clock',              'tone' => 'accent',  'count' => $this->alertCounts['other']],
-                ] as $alert)
-                    <li>
-                        <a href="{{ route($alert['route']) }}" wire:navigate class="group flex items-center gap-3 py-3 transition-colors first:pt-0 last:pb-0 hover:bg-surface-2">
-                            <span @class([
-                                'flex size-9 shrink-0 items-center justify-center rounded-full',
-                                'bg-warning-soft text-warning' => $alert['tone'] === 'warning',
-                                'bg-danger-soft text-danger' => $alert['tone'] === 'danger',
-                                'bg-accent-soft text-accent' => $alert['tone'] === 'accent',
-                            ])>
-                                <flux:icon :icon="$alert['icon']" class="size-4" />
-                            </span>
-                            <span class="flex-1">
-                                <span class="block text-[13px] font-semibold text-ink">{{ $alert['label'] }}</span>
-                                <span class="block text-[11.5px] text-ink-muted">
-                                    @if ($alert['count'] === 0)
-                                        No new hits
-                                    @else
-                                        {{ $alert['count'] }} {{ $alert['count'] === 1 ? 'event' : 'events' }} in the last 24 h
-                                    @endif
+                <ul class="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
+                    @foreach ([
+                        ['label' => 'Watchlist alerts', 'route' => 'watchlist', 'count' => $this->alertCounts['watchlist'], 'help' => 'Raised for Watch and VIP plates', 'danger' => false],
+                        ['label' => 'Blocked-plate alerts', 'route' => 'watchlist', 'count' => $this->alertCounts['blacklist'], 'help' => 'Raised for plates labelled Blocked', 'danger' => true],
+                        ['label' => 'Other alerts', 'route' => 'security', 'count' => $this->alertCounts['other'], 'help' => 'Long stays, odd hours, repeated entries', 'danger' => false],
+                    ] as $alert)
+                        <li>
+                            <a
+                                href="{{ route($alert['route']) }}"
+                                wire:navigate
+                                class="flex min-h-11 flex-col rounded-lg border border-line px-3 py-2 transition-colors hover:border-accent/40 hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                            >
+                                <span class="flex items-baseline justify-between gap-2">
+                                    <span class="text-[13px] font-medium text-ink-2">{{ $alert['label'] }}</span>
+                                    @php $loud = $alert['danger'] && $alert['count'] > 0; @endphp
+                                    <span @class(['text-[20px] font-semibold tabular-nums', 'text-danger' => $loud, 'text-ink' => ! $loud])>{{ $alert['count'] }}</span>
                                 </span>
-                            </span>
-                            <span @class([
-                                'rounded-full px-2.5 py-0.5 text-[12px] font-semibold tabular-nums',
-                                'bg-warning-soft text-warning' => $alert['tone'] === 'warning',
-                                'bg-danger-soft text-danger' => $alert['tone'] === 'danger',
-                                'bg-accent-soft text-accent' => $alert['tone'] === 'accent',
-                            ])>{{ $alert['count'] }}</span>
-                            <flux:icon icon="chevron-right" class="size-4 text-ink-muted" />
-                        </a>
-                    </li>
-                @endforeach
-            </ul>
-        </x-panel-card>
-        @endif
-
-        {{-- Recent watchlist hits — owner-only. --}}
-        @if ($this->canSeeSecurity)
-        <x-panel-card>
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                        <flux:icon icon="bell-alert" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[13px] font-semibold text-ink">Recent Watchlist Hits</p>
-                        <p class="text-[11.5px] text-ink-muted">Latest 4 detections</p>
-                    </div>
-                </div>
-                <a href="{{ route('watchlist') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
-            </x-slot:header>
-
-            @if ($this->recentWatchlistHits->isEmpty())
-                <x-placeholder>No watchlist plates seen recently.</x-placeholder>
-            @elseif ($this->canSeePlates)
-                <ul class="flex flex-col divide-y divide-line text-[13px]">
-                    @foreach ($this->recentWatchlistHits as $hit)
-                        <li class="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
-                            <div class="min-w-0 flex-1">
-                                <div class="font-mono text-[13px] font-semibold {{ $hit->kind === 'block' ? 'text-danger' : 'text-ink' }}">
-                                    {{ App\Support\PlateNumber::forDisplay($hit->plate_number) }}
-                                </div>
-                                <div class="text-[11.5px] text-ink-muted">
-                                    {{ $hit->camera_name }}
-                                    · {{ \Illuminate\Support\Facades\Date::parse($hit->captured_at)->format('D H:i') }}
-                                </div>
-                            </div>
-                            <span class="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">
-                                Cam {{ str_pad((string) $hit->camera_id, 2, '0', STR_PAD_LEFT) }}
-                            </span>
+                                <span class="text-[12px] text-ink-2">{{ $alert['help'] }}</span>
+                            </a>
                         </li>
                     @endforeach
                 </ul>
-            @else
-                <x-placeholder>Plate details are restricted to owner accounts.</x-placeholder>
-            @endif
-        </x-panel-card>
+
+                <h3 class="mt-4 mb-1 text-[13px] font-semibold text-ink">Recent watchlist matches <span class="font-normal text-ink-muted">· camera reads, last 48 hours</span></h3>
+                @if ($this->recentWatchlistHits->isEmpty())
+                    <p class="text-[13px] text-ink-2">No watchlist plates read in the last 48 hours.</p>
+                @else
+                    <ul class="divide-y divide-line text-[13px]">
+                        @foreach ($this->recentWatchlistHits as $hit)
+                            <li class="flex items-center justify-between gap-3 py-2">
+                                <span class="min-w-0">
+                                    <span @class(['font-mono font-semibold', 'text-danger' => $hit->kind === WatchlistKind::Block->value, 'text-ink' => $hit->kind !== WatchlistKind::Block->value])>
+                                        {{ PlateNumber::forDisplay($hit->plate_number) }}
+                                    </span>
+                                    <span class="text-ink-2"> · {{ $hit->camera_name }}</span>
+                                </span>
+                                <span class="shrink-0 tabular-nums text-ink-2">{{ Date::parse($hit->captured_at)->format('D H:i') }}</span>
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </x-panel-card>
         @endif
     </div>
 
-    {{-- ── Latest activity ──────────────────────────────────────────────
-         Every camera detection shows as its own row, so a vehicle that came
-         in twice appears twice — the visit-backed version hid re-entries
-         inside the still-open first visit and made the timestamps look stale.
-         Owner-only, and only rendered when we actually have plates. --}}
-    @if ($this->canSeePlates && ($this->latestEntries->isNotEmpty() || $this->cameraId !== null))
-    <div class="mb-6">
-        <x-panel-card>
-            <x-slot:header>
-                <div class="flex items-center gap-3">
-                    <span class="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-                        <flux:icon icon="truck" class="size-4" />
-                    </span>
-                    <div>
-                        <p class="text-[13px] font-semibold text-ink">Latest activity</p>
-                        <p class="text-[11.5px] text-ink-muted">Most recent camera detections</p>
-                    </div>
-                </div>
-                <div class="flex items-center gap-2">
-                    @if ($this->hasMultipleCameras)
-                        <flux:select
-                            wire:model.live="cameraId"
-                            size="sm"
-                            class="min-w-40"
-                            label="Camera"
-                            label:sr-only
-                        >
-                            <flux:select.option :value="null">All cameras</flux:select.option>
-                            @foreach ($this->cameras as $camera)
-                                <flux:select.option :value="$camera->id">{{ $camera->name }}</flux:select.option>
-                            @endforeach
-                        </flux:select>
-                    @endif
-                    <a href="{{ route('activity') }}" wire:navigate class="text-[12px] font-medium text-accent hover:underline">View all</a>
-                </div>
-            </x-slot:header>
+    @if ($this->canSeePlates)
+        <x-panel-card class="mt-4" title="Recent activity" description="Latest 5 camera detections, entries and exits">
+            <x-slot:actions>
+                @if ($this->hasMultipleCameras)
+                    <flux:select wire:model.live="cameraId" class="min-w-40" label="Camera" label:sr-only>
+                        <flux:select.option :value="null">All cameras</flux:select.option>
+                        @foreach ($this->cameras as $camera)
+                            <flux:select.option :value="$camera->id">{{ $camera->name }}</flux:select.option>
+                        @endforeach
+                    </flux:select>
+                @endif
+                <a href="{{ route('activity') }}" wire:navigate class="inline-flex min-h-11 items-center text-[13px] font-medium text-accent hover:underline">View all activity</a>
+            </x-slot:actions>
 
             @if ($this->latestEntries->isEmpty())
-                <x-placeholder>No detections for this camera yet.</x-placeholder>
+                <x-empty-state :title="$this->cameraId ? 'No detections for this camera yet' : 'No detections yet'" icon="truck" />
             @else
-            <table class="w-full text-[13px]">
-                <thead>
-                    <tr class="text-left text-[11px] uppercase tracking-[0.14em] text-ink-muted">
-                        <th class="pb-2 font-semibold">Plate</th>
-                        <th class="pb-2 font-semibold">Detected</th>
-                        <th class="pb-2 font-semibold">Camera</th>
-                        <th class="pb-2 font-semibold">Direction</th>
-                        <th class="pb-2 text-right font-semibold">
-                            {{ $this->hasExitTracking ? 'Currently' : 'Confidence' }}
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($this->latestEntries as $entry)
-                        <tr class="border-t border-line" wire:key="latest-entry-{{ $entry->id }}">
-                            <td class="py-2 font-mono font-semibold text-ink">
-                                {{ App\Support\PlateNumber::forDisplay($entry->plate_number) }}
-                            </td>
-                            <td class="py-2 text-ink-2 tabular-nums">
-                                {{ $entry->captured_at->format('D H:i') }}
-                            </td>
-                            <td class="py-2 text-ink-2">
-                                {{ $entry->camera?->name ?? '—' }}
-                            </td>
-                            <td class="py-2">
-                                @php $isIn = $entry->direction === \App\Enums\PlateDirection::In; @endphp
-                                <span @class([
-                                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]',
-                                    'bg-accent-soft text-accent' => $isIn,
-                                    'bg-warning-soft text-warning' => ! $isIn,
-                                ])>
-                                    <flux:icon :icon="$isIn ? 'arrow-down-right' : 'arrow-up-left'" class="size-3" />
-                                    {{ $isIn ? 'In' : 'Out' }}
-                                </span>
-                            </td>
-                            <td class="py-2 text-right">
-                                @if ($this->hasExitTracking)
-                                    {{-- "Currently" is a plate-level flag: is this vehicle
-                                         still on the premises right now? For an OUT event
-                                         it will almost always be false (they just left).
-                                         For an IN event that's still open it will be true.
-                                         We show the pill only when true — the em-dash for
-                                         false keeps the column quiet on rows where the
-                                         answer is "not right now, and that's expected". --}}
-                                    @if ($entry->getAttribute('on_site_now'))
-                                        <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent">On site</span>
+                <div class="relative overflow-x-auto">
+                    <x-data-table :headers="['Vehicle', 'Time', 'Camera', 'Direction', ['label' => $this->hasExitTracking ? 'Currently' : 'Confidence', 'align' => 'right']]">
+                        @foreach ($this->latestEntries as $entry)
+                            @php $isIn = $entry->direction === PlateDirection::In; @endphp
+                            <tr wire:key="latest-entry-{{ $entry->id }}">
+                                <td class="border-b border-line py-2.5 font-mono font-semibold whitespace-nowrap text-ink">{{ PlateNumber::forDisplay($entry->plate_number) }}</td>
+                                <td class="border-b border-line py-2.5 whitespace-nowrap tabular-nums text-ink-2">{{ $entry->captured_at->isToday() ? $entry->captured_at->format('H:i') : $entry->captured_at->format('D H:i') }}</td>
+                                <td class="border-b border-line py-2.5 text-ink-2">{{ $entry->camera?->name ?? '—' }}</td>
+                                <td class="border-b border-line py-2.5">
+                                    <span @class([
+                                        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-semibold',
+                                        'bg-accent-soft text-accent' => $isIn,
+                                        'bg-surface-2 text-ink-2' => ! $isIn,
+                                    ])>
+                                        <flux:icon :icon="$isIn ? 'arrow-down-right' : 'arrow-up-left'" class="size-3" aria-hidden="true" />
+                                        {{ $isIn ? 'Entry' : 'Exit' }}
+                                    </span>
+                                </td>
+                                <td class="border-b border-line py-2.5 text-right">
+                                    @if ($this->hasExitTracking)
+                                        @if ($entry->getAttribute('on_site_now'))
+                                            <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[12px] font-semibold text-accent">On site</span>
+                                        @else
+                                            <span class="text-ink-2" aria-label="Not on site">—</span>
+                                        @endif
                                     @else
-                                        <span class="text-[11.5px] text-ink-muted">—</span>
+                                        @php $conf = $entry->confidence === null ? null : (int) round($entry->confidence * 100); @endphp
+                                        <span class="tabular-nums text-ink-2">{{ $conf === null ? '—' : $conf.'%' }}</span>
                                     @endif
-                                @else
-                                    @php $conf = $entry->confidence === null ? null : (int) round($entry->confidence * 100); @endphp
-                                    @if ($conf === null)
-                                        <span class="text-[11.5px] text-ink-muted">—</span>
-                                    @else
-                                        <span @class([
-                                            'text-[11.5px] tabular-nums',
-                                            'text-warning' => $conf < 85,
-                                            'text-ink-2' => $conf >= 85,
-                                        ])>{{ $conf }}%</span>
-                                    @endif
-                                @endif
-                            </td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </x-data-table>
+                </div>
             @endif
         </x-panel-card>
-    </div>
     @endif
-
-    {{-- Footer band --}}
-    <div class="flex items-center justify-between border-t border-line pt-4 text-[11.5px] text-ink-muted">
-        <span>© {{ now()->year }} {{ config('app.name') }}. All rights reserved.</span>
-        <span>Version 1.0.0</span>
-    </div>
 </div>

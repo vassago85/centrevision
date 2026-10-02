@@ -35,31 +35,16 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
     const colors = themeColors();
 
     // Support the single-series shorthand (`values: [...]`) and the grouped
-    // multi-series form (`series: [{label, values, color}, ...]`).
-    //
-    // For grouped charts we detect the "scale mismatch" case — when one
-    // series is at least four times larger than the first (usually the
-    // "current period" vs a "previous period" that was much busier). In
-    // that case we pin each series to its own Y-axis so a quiet current
-    // period stays legible instead of collapsing to zero-height bars.
-    const maxOf = (arr) => arr.reduce((m, v) => (v > m ? v : m), 0);
-    const useDualAxis = (() => {
-        if (!series || series.length < 2) return false;
-        const primary = maxOf(series[0].values ?? []);
-        return series.slice(1).some((s) => {
-            const other = maxOf(s.values ?? []);
-            return primary > 0 ? other >= primary * 4 : other > 0;
-        });
-    })();
-
+    // multi-series form (`series: [{label, values, color}, ...]`). Grouped
+    // series always share one Y-axis: they are being compared, and separate
+    // scales would make a quiet period look as busy as a full one.
     const datasets = (series && series.length)
-        ? series.map((s, index) => ({
+        ? series.map((s) => ({
               label: s.label,
               data: s.values,
               backgroundColor: colors[s.color] ?? s.color ?? colors.accent,
               borderRadius: 4,
               maxBarThickness,
-              yAxisID: useDualAxis ? (index === 0 ? 'y' : 'y1') : 'y',
           }))
         : [
               {
@@ -79,7 +64,7 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
             // Chart.js queues each draw through requestAnimationFrame. On a
             // Livewire re-render the canvas can be detached between the RAF
             // being scheduled and it firing, which is what caused the
-            // "Cannot read properties of null (reading 'save')" crash — the
+            // "Cannot read properties of null (reading 'save')" crash â€” the
             // frame tried to draw on a canvas whose 2D context had gone away.
             // Skipping the animation removes that RAF window entirely.
             animation: false,
@@ -94,7 +79,7 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
                               boxWidth: 10,
                               boxHeight: 10,
                               padding: 12,
-                              font: { size: 11 },
+                              font: { size: 12 },
                           },
                       }
                     : { display: false },
@@ -118,26 +103,13 @@ function barChartConfig({ labels, values, series, color, maxBarThickness, showLe
             scales: {
                 x: {
                     grid: { display: false },
-                    ticks: { color: colors.muted, font: { size: 11 } },
+                    ticks: { color: colors.muted, font: { size: 12 } },
                 },
                 y: {
                     grid: { color: colors.line },
-                    ticks: { color: colors.muted, font: { size: 11 } },
+                    ticks: { color: colors.muted, font: { size: 12 }, precision: 0 },
                     beginAtZero: true,
                 },
-                // Right-hand scale for the "previous period" bars when the
-                // two series live on wildly different orders of magnitude.
-                // Kept in-sync visually with the left axis (same grid off,
-                // same font) so the dashboard doesn't feel like two charts
-                // pretending to be one.
-                ...(useDualAxis ? {
-                    y1: {
-                        position: 'right',
-                        grid: { display: false },
-                        ticks: { color: colors.muted, font: { size: 11 } },
-                        beginAtZero: true,
-                    },
-                } : {}),
             },
         },
     };
@@ -248,7 +220,7 @@ document.addEventListener('alpine:init', () => {
             const canvas = this.$refs.canvas;
 
             // Bail if the canvas has been ripped out or has no paintable area
-            // yet — Chart.js crashes on a 0x0 context. The theme observer or
+            // yet â€” Chart.js crashes on a 0x0 context. The theme observer or
             // the next payload change will retry.
             if (!canvas || !canvas.isConnected || canvas.offsetParent === null) {
                 return;

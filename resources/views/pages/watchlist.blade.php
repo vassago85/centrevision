@@ -231,136 +231,147 @@ new #[Title('Watchlist')] class extends Component
      this page never disagree by more than one poll cycle. --}}
 <div wire:poll.30s>
     <x-page-header title="Watchlist" subtitle="Plates you want to hear about the moment they arrive.">
-        <x-slot:actions>
-            <flux:button size="sm" variant="primary" wire:click="$set('showForm', true)">Add plate</flux:button>
-        </x-slot:actions>
+        @if ($this->entries->isNotEmpty() && ! $showForm)
+            <x-slot:actions>
+                <flux:button size="sm" variant="primary" icon="plus" wire:click="$set('showForm', true)" data-test="add-plate">Add plate</flux:button>
+            </x-slot:actions>
+        @endif
     </x-page-header>
 
     @if ($showForm)
-        <x-panel heading="{{ $editingId ? 'Update watchlist entry' : 'Add to watchlist' }}">
-            <form wire:submit="save" class="grid gap-4 rounded-tf border border-line bg-surface p-5 md:grid-cols-2">
+        <x-panel-card class="mb-4" :title="$editingId ? 'Update watchlist entry' : 'Add to watchlist'">
+            <form wire:submit="save" class="grid gap-4 md:grid-cols-2">
                 <flux:select wire:model="siteId" label="Site">
                     @foreach (app(App\Support\Tenancy::class)->sites() as $s)
                         <flux:select.option :value="$s->id">{{ $s->name }}</flux:select.option>
                     @endforeach
                 </flux:select>
 
-                <flux:select wire:model="kind" label="Kind">
+                <flux:select
+                    wire:model="kind"
+                    label="Category"
+                    description="Any active entry raises a watchlist alert when the plate enters, if email alerts are on. No category opens or closes a gate."
+                >
                     @foreach ($this->kindOptions() as $value => $label)
                         <flux:select.option :value="$value">{{ $label }}</flux:select.option>
                     @endforeach
                 </flux:select>
 
                 <flux:input wire:model="plateNumber" label="Registration" placeholder="ABC 123 GP" />
-                <flux:input wire:model="expiresAt" label="Expires" type="datetime-local" description="Optional. Blank = never expires." />
+                <flux:input wire:model="expiresAt" label="Expires" type="datetime-local" description="Optional. Leave blank to keep the plate on the list." />
 
                 <flux:input wire:model="reason" label="Reason" class="md:col-span-2" placeholder="Why is this plate on the list?" />
 
                 <div class="flex items-center gap-2 md:col-span-2">
-                    <flux:button size="sm" variant="primary" type="submit">{{ $editingId ? 'Save changes' : 'Add' }}</flux:button>
-                    <flux:button size="sm" variant="ghost" type="button" wire:click="$set('showForm', false)">Cancel</flux:button>
+                    <flux:button variant="primary" type="submit">{{ $editingId ? 'Save changes' : 'Add plate' }}</flux:button>
+                    <flux:button variant="ghost" type="button" wire:click="$set('showForm', false)">Cancel</flux:button>
                 </div>
             </form>
-        </x-panel>
+        </x-panel-card>
     @endif
 
-    {{-- Kind summary — the three counts stay at the top so a security
-         operator can see at a glance whether anything red is on the list.
-         Blocks paint danger, watch paints warn, VIP paints positive. --}}
-    <div class="mb-6 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-        <x-metric label="Blocked" :value="$this->counts['block']" variant="danger" />
-        <x-metric label="Watch" :value="$this->counts['watch']" variant="warn" />
-        <x-metric label="VIP" :value="$this->counts['vip']" variant="positive" />
-    </div>
-
     @if ($this->entries->isEmpty())
-        {{-- One compact empty state for the whole list. Beats three
-             oversized "no entries" boxes stacked vertically. --}}
-        <div class="rounded-tf border border-dashed border-line bg-surface p-8 text-center">
-            <div class="mx-auto flex size-11 items-center justify-center rounded-full bg-accent-soft text-accent">
-                <flux:icon icon="bell-alert" class="size-5" />
-            </div>
-            <h2 class="mt-3 text-[15px] font-semibold text-ink">No plates on your watchlist</h2>
-            <p class="mx-auto mt-1 max-w-md text-[13px] text-ink-2">
-                Add a plate to be notified the moment it arrives at any of your sites.
-            </p>
-            <flux:button class="mt-4" size="sm" variant="primary" icon="plus" wire:click="$set('showForm', true)">Add plate</flux:button>
-        </div>
+        @unless ($showForm)
+            <x-panel-card>
+                <x-empty-state title="No plates on your watchlist" icon="bell-alert">
+                    Add a plate to be notified the moment it arrives at any of your sites.
+                    <x-slot:action>
+                        <flux:button size="sm" variant="primary" icon="plus" wire:click="$set('showForm', true)" data-test="add-plate">Add plate</flux:button>
+                    </x-slot:action>
+                </x-empty-state>
+            </x-panel-card>
+        @endunless
     @else
-        <x-panel heading="Watchlist ({{ $this->visibleEntries->count() }})">
-            <x-slot:actions>
-                {{-- Filter chips share the same URL slot, so a link like
-                     /watchlist?filter=expired lands the recipient on the
-                     exact same view. --}}
-                <div class="flex flex-wrap gap-1 rounded-md border border-line bg-surface-2 p-1">
-                    @foreach ($this->filterChips as $chip)
-                        <button
-                            type="button"
-                            wire:click="$set('filter', '{{ $chip['key'] }}')"
-                            @class([
-                                'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-[12px] font-semibold transition-colors',
-                                'bg-accent text-white shadow-tf-sm' => $filter === $chip['key'],
-                                'text-ink-2 hover:bg-surface hover:text-ink' => $filter !== $chip['key'],
-                            ])
-                        >
-                            <span>{{ $chip['label'] }}</span>
+        <x-panel-card padding="p-0">
+            {{-- Filter chips share the same URL slot, so a link like
+                 /watchlist?filter=expired lands the recipient on the
+                 exact same view. --}}
+            <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3" role="group" aria-label="Filter by category">
+                @foreach ($this->filterChips as $chip)
+                    <button
+                        type="button"
+                        wire:click="$set('filter', '{{ $chip['key'] }}')"
+                        aria-pressed="{{ $filter === $chip['key'] ? 'true' : 'false' }}"
+                        @class([
+                            'inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent max-sm:min-h-11',
+                            'border-accent bg-accent text-white' => $filter === $chip['key'],
+                            'border-line bg-surface text-ink-2 hover:border-ink-muted hover:text-ink' => $filter !== $chip['key'],
+                        ])
+                    >
+                        @if ($chip['key'] !== 'all' && $chip['key'] !== 'expired')
                             <span @class([
-                                'inline-flex min-w-4 justify-center rounded-full px-1 text-[10.5px] font-semibold tabular-nums',
-                                'bg-white/20 text-white' => $filter === $chip['key'],
-                                'bg-surface text-ink-muted' => $filter !== $chip['key'],
-                            ])>{{ $chip['count'] }}</span>
-                        </button>
-                    @endforeach
-                </div>
-            </x-slot:actions>
-
-            <x-data-table
-                :headers="['Plate', 'Type', 'Site', 'Reason', ['label' => 'Hits · 30d', 'align' => 'right'], 'Last seen', 'Expires', ['label' => '', 'align' => 'right']]"
-                :is-empty="$this->visibleEntries->isEmpty()"
-                empty="No matching plates. Try a different filter."
-            >
-                @foreach ($this->visibleEntries as $entry)
-                    @php
-                        $hits = $this->recentHits->get($entry->id);
-                        $isExpired = $entry->expires_at !== null && $entry->expires_at->isPast();
-                    @endphp
-                    <tr wire:key="watch-{{ $entry->id }}">
-                        <td class="border-b border-line py-2"><x-plate :number="$entry->plate_number" /></td>
-                        <td class="border-b border-line py-2">
-                            <span @class([
-                                'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]',
-                                'bg-danger-soft text-danger' => $entry->kind === WatchlistKind::Block,
-                                'bg-warn-soft text-warn' => $entry->kind === WatchlistKind::Watch,
-                                'bg-positive-soft text-positive' => $entry->kind === WatchlistKind::Vip,
-                            ])>{{ $entry->kind->label() }}</span>
-                        </td>
-                        <td class="border-b border-line py-2 text-ink-2">{{ $entry->site->name }}</td>
-                        <td class="border-b border-line py-2 text-ink-2">{{ $entry->reason ?: '—' }}</td>
-                        <td class="border-b border-line py-2 text-right font-semibold {{ $hits ? 'text-'.$entry->kind->tone() : 'text-ink-muted' }}">
-                            {{ $hits?->hits_30d ?? '—' }}
-                        </td>
-                        <td class="border-b border-line py-2 text-ink-2">
-                            {{ $hits && $hits->last_seen_at ? \Illuminate\Support\Facades\Date::parse($hits->last_seen_at)->diffForHumans() : '—' }}
-                        </td>
-                        <td class="border-b border-line py-2 {{ $isExpired ? 'text-danger font-semibold' : 'text-ink-2' }}">
-                            @if ($entry->expires_at)
-                                {{ $entry->expires_at->format('j M Y') }}{{ $isExpired ? ' · expired' : '' }}
-                            @else
-                                Never
-                            @endif
-                        </td>
-                        <td class="border-b border-line py-2 text-right">
-                            <flux:button size="xs" variant="ghost" wire:click="edit({{ $entry->id }})">Edit</flux:button>
-                            <flux:button
-                                size="xs"
-                                variant="danger"
-                                wire:click="remove({{ $entry->id }})"
-                                wire:confirm="Remove {{ $entry->plate_number }} from the watchlist?"
-                            >Remove</flux:button>
-                        </td>
-                    </tr>
+                                'size-2 rounded-full',
+                                'bg-danger' => $chip['key'] === 'block',
+                                'bg-warn' => $chip['key'] === 'watch',
+                                'bg-positive' => $chip['key'] === 'vip',
+                            ]) aria-hidden="true"></span>
+                        @endif
+                        <span>{{ $chip['label'] }}</span>
+                        <span @class([
+                            'tabular-nums',
+                            'text-white/80' => $filter === $chip['key'],
+                            'text-ink-muted' => $filter !== $chip['key'],
+                        ])>{{ $chip['count'] }}</span>
+                    </button>
                 @endforeach
-            </x-data-table>
-        </x-panel>
+            </div>
+
+            <div class="p-4 sm:p-5">
+                <x-data-table
+                    :headers="['Plate', 'Category', 'Site', 'Reason', ['label' => 'Reads · 30 days', 'align' => 'right'], 'Last seen', 'Expires', ['label' => '', 'align' => 'right']]"
+                    :is-empty="$this->visibleEntries->isEmpty()"
+                    empty="No plates in this category. Try a different filter."
+                >
+                    @foreach ($this->visibleEntries as $entry)
+                        @php
+                            $hits = $this->recentHits->get($entry->id);
+                            $isExpired = $entry->expires_at !== null && $entry->expires_at->isPast();
+                        @endphp
+                        <tr wire:key="watch-{{ $entry->id }}">
+                            <td class="border-b border-line py-2"><x-plate :number="$entry->plate_number" /></td>
+                            <td class="border-b border-line py-2">
+                                <span @class([
+                                    'inline-flex items-center rounded-full px-2 py-0.5 text-[12px] font-semibold',
+                                    'bg-danger-soft text-danger' => $entry->kind === WatchlistKind::Block,
+                                    'bg-warn-soft text-warn' => $entry->kind === WatchlistKind::Watch,
+                                    'bg-positive-soft text-positive' => $entry->kind === WatchlistKind::Vip,
+                                ])>{{ $entry->kind->label() }}</span>
+                            </td>
+                            <td class="border-b border-line py-2 text-ink-2">{{ $entry->site->name }}</td>
+                            <td class="border-b border-line py-2 text-ink-2">{{ $entry->reason ?: '—' }}</td>
+                            <td class="border-b border-line py-2 text-right tabular-nums {{ $hits ? 'font-semibold text-ink' : 'text-ink-muted' }}">
+                                {{ $hits?->hits_30d ?? '—' }}
+                            </td>
+                            <td class="whitespace-nowrap border-b border-line py-2 text-ink-2">
+                                {{ $hits && $hits->last_seen_at ? \Illuminate\Support\Facades\Date::parse($hits->last_seen_at)->diffForHumans() : 'Not seen' }}
+                            </td>
+                            <td class="whitespace-nowrap border-b border-line py-2 {{ $isExpired ? 'font-semibold text-danger' : 'text-ink-2' }}">
+                                @if ($entry->expires_at)
+                                    {{ $entry->expires_at->format('j M Y') }}{{ $isExpired ? ' · expired' : '' }}
+                                @else
+                                    Never
+                                @endif
+                            </td>
+                            <td class="border-b border-line py-2 text-right">
+                                <div class="flex items-center justify-end gap-1 whitespace-nowrap">
+                                    <flux:button size="sm" variant="ghost" wire:click="edit({{ $entry->id }})">Edit</flux:button>
+                                    <flux:button
+                                        size="sm"
+                                        variant="ghost"
+                                        class="text-danger!"
+                                        wire:click="remove({{ $entry->id }})"
+                                        wire:confirm="Remove {{ $entry->plate_number }} from the watchlist?"
+                                    >Remove</flux:button>
+                                </div>
+                            </td>
+                        </tr>
+                    @endforeach
+                </x-data-table>
+
+                <p class="mt-3 text-[12.5px] text-ink-muted">
+                    Reads are camera detections at the plate's site in the last 30 days. Categories only change how a match is labelled and alerted; CentreVision does not control gates or barriers.
+                </p>
+            </div>
+        </x-panel-card>
     @endif
 </div>

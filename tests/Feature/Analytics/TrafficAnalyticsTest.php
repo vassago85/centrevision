@@ -560,3 +560,46 @@ it('averages weekday visits in Monday-first order', function () {
         'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
     ])->and($days[0]['count'])->toBe(1);
 });
+
+it('leaves exit-only cameras out of the entry points breakdown', function () {
+    // A plate marked as entering through a camera the operator configured
+    // as exit-only is noise on the exit lane, not a real arrival at that
+    // gate. The entry points panel should ignore it.
+    $entrance = Camera::factory()->for($this->site)->entrance()->create(['name' => 'Main gate']);
+    $exit = Camera::factory()->for($this->site)->exit()->create(['name' => 'West exit']);
+
+    foreach (['AA11GP', 'BB22GP', 'CC33GP'] as $plate) {
+        $entry = PlateEvent::factory()->for($entrance)->create([
+            'plate_number' => $plate,
+            'direction' => PlateDirection::In,
+            'captured_at' => Date::now()->subHours(2),
+        ]);
+        Visit::factory()->for($this->site)->create([
+            'plate_number' => $plate,
+            'entry_event_id' => $entry->id,
+            'entered_at' => $entry->captured_at,
+            'exited_at' => $entry->captured_at->copy()->addMinutes(30),
+            'dwell_minutes' => 30,
+            'status' => VisitStatus::Closed,
+        ]);
+    }
+
+    $strayEntry = PlateEvent::factory()->for($exit)->create([
+        'plate_number' => 'DD44GP',
+        'direction' => PlateDirection::In,
+        'captured_at' => Date::now()->subHour(),
+    ]);
+    Visit::factory()->for($this->site)->create([
+        'plate_number' => 'DD44GP',
+        'entry_event_id' => $strayEntry->id,
+        'entered_at' => $strayEntry->captured_at,
+        'exited_at' => $strayEntry->captured_at->copy()->addMinutes(30),
+        'dwell_minutes' => 30,
+        'status' => VisitStatus::Closed,
+    ]);
+
+    $rows = $this->analytics->topEntryPoints($this->range);
+
+    expect($rows->pluck('label')->all())->toBe(['Main gate'])
+        ->and($rows[0]['count'])->toBe(3);
+});

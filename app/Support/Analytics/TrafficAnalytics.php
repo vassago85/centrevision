@@ -563,10 +563,15 @@ class TrafficAnalytics
      */
     public function topEntryPoints(DateRange $range, int $limit = 5): Collection
     {
+        // An exit-only camera that happens to record a plate marked "In" (a
+        // vehicle turning around on the exit lane, say) is still an exit as
+        // far as the operator is concerned. Dropping it here keeps the Entry
+        // points panel aligned with each camera's configured role.
         $rows = $this->baseQuery($range)
             ->whereNotNull('entry_event_id')
             ->join('plate_events as entry_event', 'entry_event.id', '=', 'visits.entry_event_id')
             ->join('cameras', 'cameras.id', '=', 'entry_event.camera_id')
+            ->whereIn('cameras.role', [CameraRole::Entrance->value, CameraRole::Both->value])
             ->selectRaw('cameras.name as label, count(*) as total')
             ->groupBy('cameras.name')
             ->orderByDesc('total')
